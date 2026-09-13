@@ -51,7 +51,7 @@ use crate::settings::{
     AppSettings, CdnCacheStore, DEFAULT_NAVIGATION_HISTORY_LIMIT, LibraryCache, LyricFrameRate,
     MAX_IMAGE_CACHE_CAPACITY, MAX_NAVIGATION_HISTORY_LIMIT, PersistedLibraryView,
     PersistedPlayback, PersistedQueueContinuation, PersistedWindowSize, SettingsStore,
-    TrayIconStyle, default_lyric_font_families, default_monospace_font_families,
+    TrayIconStyle, WindowDecoration, default_lyric_font_families, default_monospace_font_families,
     default_ui_font_families, parse_font_families,
 };
 use crate::singleflight::SingleFlight;
@@ -5554,6 +5554,15 @@ impl LyruneView {
         cx.notify();
     }
 
+    fn set_window_decoration(&mut self, decoration: WindowDecoration, cx: &mut Context<Self>) {
+        if self.settings.window_decoration == decoration {
+            return;
+        }
+        self.settings.window_decoration = decoration;
+        self.persist_settings();
+        cx.notify();
+    }
+
     fn set_preferred_playback_quality(&mut self, quality: Quality, cx: &mut Context<Self>) {
         if self.settings.playback_quality == quality {
             return;
@@ -6570,6 +6579,22 @@ impl LyruneView {
                     )
             })
             .collect::<Vec<_>>();
+        let selected_window_decoration = self.settings.window_decoration;
+        let window_decoration_buttons =
+            WindowDecoration::ALL
+                .into_iter()
+                .map(|decoration| {
+                    Button::new(decoration.id())
+                        .label(decoration.label())
+                        .ghost()
+                        .flex_1()
+                        .h(px(38.))
+                        .selected(selected_window_decoration == decoration)
+                        .on_click(cx.listener(move |this, _, _, cx| {
+                            this.set_window_decoration(decoration, cx)
+                        }))
+                })
+                .collect::<Vec<_>>();
         let preferred_quality = self.settings.playback_quality;
         let quality_rows = Quality::ALL
             .chunks(2)
@@ -6671,6 +6696,26 @@ impl LyruneView {
                                                 .w_full()
                                                 .gap_1()
                                                 .children(tray_icon_buttons),
+                                        ),
+                                )
+                                .child(
+                                    v_flex()
+                                        .gap_2()
+                                        .pt_4()
+                                        .border_t_1()
+                                        .border_color(theme.border)
+                                        .child(div().font_medium().child("窗口装饰"))
+                                        .child(
+                                            div()
+                                                .text_xs()
+                                                .text_color(theme.muted_foreground)
+                                                .child("SSD 使用系统绘制标题栏；CSD 由 Lyrune 绘制窗口按钮和边框"),
+                                        )
+                                        .child(
+                                            h_flex()
+                                                .w_full()
+                                                .gap_1()
+                                                .children(window_decoration_buttons),
                                         ),
                                 )
                                 .child(
