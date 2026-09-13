@@ -92,6 +92,8 @@ pub struct BlurredCover {
     image: Arc<Image>,
     wide_lyrics_rgb: [f32; 3],
     narrow_lyrics_rgb: [f32; 3],
+    collapse_rgb: [f32; 3],
+    controls_rgb: [f32; 3],
 }
 
 impl BlurredCover {
@@ -101,6 +103,14 @@ impl BlurredCover {
         } else {
             self.wide_lyrics_rgb
         }
+    }
+
+    pub fn controls_rgb(&self) -> [f32; 3] {
+        self.controls_rgb
+    }
+
+    pub fn collapse_rgb(&self) -> [f32; 3] {
+        self.collapse_rgb
     }
 }
 
@@ -312,6 +322,8 @@ fn generate_blurred_cover(path: &Path) -> anyhow::Result<Arc<BlurredCover>> {
     );
     let wide_lyrics_rgb = sample_lyrics_region(&blurred, false);
     let narrow_lyrics_rgb = sample_lyrics_region(&blurred, true);
+    let collapse_rgb = sample_controls_region(&blurred, true);
+    let controls_rgb = sample_controls_region(&blurred, false);
     let mut bytes = Cursor::new(Vec::new());
     blurred
         .write_to(&mut bytes, image::ImageFormat::Png)
@@ -320,6 +332,8 @@ fn generate_blurred_cover(path: &Path) -> anyhow::Result<Arc<BlurredCover>> {
         image: Arc::new(Image::from_bytes(ImageFormat::Png, bytes.into_inner())),
         wide_lyrics_rgb,
         narrow_lyrics_rgb,
+        collapse_rgb,
+        controls_rgb,
     }))
 }
 
@@ -364,6 +378,43 @@ fn sample_lyrics_region(image: &image::DynamicImage, narrow: bool) -> [f32; 3] {
         .rows()
         .skip((height / 4) as usize)
         .take((height / 2) as usize)
+    {
+        for color in pixel
+            .skip(start_x as usize)
+            .take(end_x.saturating_sub(start_x) as usize)
+        {
+            totals[0] += u64::from(color[0]);
+            totals[1] += u64::from(color[1]);
+            totals[2] += u64::from(color[2]);
+            count += 1;
+        }
+    }
+    if count == 0 {
+        return [0.; 3];
+    }
+    [
+        totals[0] as f32 / count as f32 / 255.,
+        totals[1] as f32 / count as f32 / 255.,
+        totals[2] as f32 / count as f32 / 255.,
+    ]
+}
+
+fn sample_controls_region(image: &image::DynamicImage, left: bool) -> [f32; 3] {
+    let image = image.to_rgb8();
+    let (width, height) = image.dimensions();
+    let (start_x, end_x) = if left {
+        (0, width / 5)
+    } else {
+        (width * 4 / 5, width)
+    };
+    let start_y = height / 20;
+    let end_y = height / 5;
+    let mut totals = [0_u64; 3];
+    let mut count = 0_u64;
+    for pixel in image
+        .rows()
+        .skip(start_y as usize)
+        .take(end_y.saturating_sub(start_y) as usize)
     {
         for color in pixel
             .skip(start_x as usize)
