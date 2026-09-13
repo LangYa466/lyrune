@@ -21,7 +21,7 @@ use std::time::Duration;
 use app::LyruneView;
 use gpui::*;
 use gpui_component::Root;
-use settings::{PersistedWindowSize, SettingsStore, TrayIconStyle};
+use settings::{PersistedWindowSize, SettingsStore, TrayIconStyle, WindowDecoration};
 use tray::TrayCommand;
 
 const DEFAULT_WINDOW_WIDTH: f32 = 1080.;
@@ -45,17 +45,31 @@ fn initial_window_size(window_size: Option<PersistedWindowSize>, cx: &App) -> Si
     size(px(width), px(height))
 }
 
-fn main_window_options(window_size: Option<PersistedWindowSize>, cx: &App) -> WindowOptions {
+fn main_window_options(
+    window_size: Option<PersistedWindowSize>,
+    decoration: WindowDecoration,
+    cx: &App,
+) -> WindowOptions {
     let bounds = Bounds::centered(None, initial_window_size(window_size, cx), cx);
+    let titlebar = (decoration == WindowDecoration::Ssd).then(|| TitlebarOptions {
+        title: Some("Lyrune".into()),
+        ..Default::default()
+    });
     WindowOptions {
-        titlebar: Some(TitlebarOptions {
-            title: Some("Lyrune".into()),
-            ..Default::default()
-        }),
+        titlebar,
+        window_background: if decoration == WindowDecoration::Csd {
+            WindowBackgroundAppearance::Transparent
+        } else {
+            WindowBackgroundAppearance::Opaque
+        },
         window_bounds: Some(WindowBounds::Windowed(bounds)),
         window_min_size: Some(size(px(MIN_WINDOW_WIDTH), px(MIN_WINDOW_HEIGHT))),
         inactive_frame_interval: Some(INACTIVE_WINDOW_FRAME_INTERVAL),
         app_id: Some("lyrune".to_owned()),
+        window_decorations: Some(match decoration {
+            WindowDecoration::Ssd => WindowDecorations::Server,
+            WindowDecoration::Csd => WindowDecorations::Client,
+        }),
         ..Default::default()
     }
 }
@@ -89,7 +103,11 @@ fn open_restored_window(
     view: Entity<LyruneView>,
     cx: &mut App,
 ) -> anyhow::Result<WindowHandle<Root>> {
-    let options = main_window_options(view.read(cx).window_size(), cx);
+    let (window_size, decoration) = {
+        let view_state = view.read(cx);
+        (view_state.window_size(), view_state.window_decoration())
+    };
+    let options = main_window_options(window_size, decoration, cx);
     cx.open_window(options, move |window, cx| {
         view.update(cx, |view, cx| view.attach_window(window, cx));
         cx.new(|cx| Root::new(view, window, cx))
@@ -161,7 +179,7 @@ fn main() {
             let view_slot_for_window = view_slot.clone();
             let window_handle = cx
                 .open_window(
-                    main_window_options(settings.window_size, cx),
+                    main_window_options(settings.window_size, settings.window_decoration, cx),
                     move |window, cx| {
                         let view = cx.new(|cx| LyruneView::new(window, settings, fonts, cx));
                         *view_slot_for_window.borrow_mut() = Some(view.clone());

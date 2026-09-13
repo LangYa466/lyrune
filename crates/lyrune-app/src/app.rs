@@ -17,7 +17,7 @@ use gpui_component::{
     ActiveTheme as _, Disableable as _, IndexPath, ResizableState, Selectable as _, Sizable as _,
     StyledExt as _,
     avatar::Avatar,
-    button::{Button, ButtonVariants as _},
+    button::{Button, ButtonCustomVariant, ButtonVariants as _},
     h_flex, h_resizable,
     input::{Input, InputEvent, InputState, MaskPattern, NumberInput},
     list::{List, ListEvent, ListState},
@@ -36,7 +36,9 @@ use wana_kana::{ConvertJapanese as _, IsJapaneseStr as _};
 use crate::cache::{AudioCache, audio_cache_limit_bytes};
 use crate::credentials::CredentialStore;
 use crate::design::{self, AppFonts, ColorTheme};
-use crate::http::{CachedImageCache, blurred_cover, blurred_image_source, cached_image_source};
+use crate::http::{
+    BlurredCover, CachedImageCache, blurred_cover, blurred_image_source, cached_image_source,
+};
 use crate::icons::{MediaIcon, lyrune_icon, media_icon, media_icon_hsla};
 use crate::library::{
     PlaylistListDelegate, TrackTableDelegate, TrackTableEvent, format_duration, playlist_cover,
@@ -51,7 +53,7 @@ use crate::settings::{
     AppSettings, CdnCacheStore, DEFAULT_NAVIGATION_HISTORY_LIMIT, LibraryCache, LyricFrameRate,
     MAX_IMAGE_CACHE_CAPACITY, MAX_NAVIGATION_HISTORY_LIMIT, PersistedLibraryView,
     PersistedPlayback, PersistedQueueContinuation, PersistedWindowSize, SettingsStore,
-    TrayIconStyle, default_lyric_font_families, default_monospace_font_families,
+    TrayIconStyle, WindowDecoration, default_lyric_font_families, default_monospace_font_families,
     default_ui_font_families, parse_font_families,
 };
 use crate::singleflight::SingleFlight;
@@ -158,6 +160,19 @@ fn readable_lyric_color(sampled_rgb: [f32; 3], overlay: Hsla, preferred: Hsla) -
         a: 1.,
     }
     .into()
+}
+
+fn foreground_for_cover(
+    url: &str,
+    overlay: Hsla,
+    preferred: Hsla,
+    sample: impl Fn(&BlurredCover) -> [f32; 3],
+    window: &mut Window,
+    cx: &mut App,
+) -> Option<Hsla> {
+    blurred_cover(url, window, cx)
+        .and_then(Result::ok)
+        .map(|cover| readable_lyric_color(sample(&cover), overlay, preferred))
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -2261,6 +2276,7 @@ pub struct LyruneView {
     progress_slider: Entity<SliderState>,
     volume_slider: Entity<SliderState>,
     image_cache: Entity<CachedImageCache>,
+    window_drag_pressed: bool,
 
     audio: Option<AudioPlayer>,
     audio_cache: Option<AudioCache>,
@@ -2316,6 +2332,8 @@ pub struct LyruneView {
     account_menu_open: bool,
     _subscriptions: Vec<Subscription>,
     _window_subscription: Option<Subscription>,
+    #[cfg(target_os = "linux")]
+    _appearance_subscription: Option<Subscription>,
     window_tick_wake: Option<async_channel::Sender<()>>,
     background_tick_wake: Option<async_channel::Sender<()>>,
     lyric_animation_frame_pending: bool,
@@ -2445,7 +2463,6 @@ impl LyruneView {
         let progress_slider = cx.new(|_| progress_slider_state(0.));
         let volume_slider = cx.new(|_| volume_slider_state(settings.volume));
         let image_cache = CachedImageCache::new(settings.image_cache_capacity, cx);
-
         let subscriptions = vec![
             cx.subscribe(&playlist_list, |this, _, event: &ListEvent, cx| {
                 if let ListEvent::Select(index) | ListEvent::Confirm(index) = event {
@@ -2599,6 +2616,7 @@ impl LyruneView {
             progress_slider,
             volume_slider,
             image_cache,
+            window_drag_pressed: false,
             audio,
             audio_cache,
             protocol_client,
@@ -2656,6 +2674,8 @@ impl LyruneView {
             account_menu_open: false,
             _subscriptions: subscriptions,
             _window_subscription: None,
+            #[cfg(target_os = "linux")]
+            _appearance_subscription: None,
             window_tick_wake: None,
             background_tick_wake: None,
             lyric_animation_frame_pending: false,
@@ -2674,10 +2694,17 @@ impl LyruneView {
     }
 
     pub(crate) fn attach_window(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        window.set_window_title("Lyrune");
         self.lyric_animation_frame_pending = false;
         self.next_lyric_highlight_frame = None;
         self.next_lyric_scroll_frame = None;
         window.set_inactive_frame_interval(self.inactive_window_frame_interval());
+        #[cfg(target_os = "linux")]
+        {
+            self._appearance_subscription = Some(window.observe_window_appearance(|window, _| {
+                window.refresh();
+            }));
+        }
         self._window_subscription = Some(cx.observe_window_bounds(window, |this, window, _| {
             let size = window.window_bounds().get_bounds().size;
             let width = f32::from(size.width).round() as u32;
@@ -2930,6 +2957,10 @@ impl LyruneView {
 
     pub(crate) fn window_size(&self) -> Option<PersistedWindowSize> {
         self.settings.window_size
+    }
+
+    pub(crate) fn window_decoration(&self) -> WindowDecoration {
+        self.settings.window_decoration
     }
 
     #[cfg(target_os = "linux")]
@@ -5554,6 +5585,29 @@ impl LyruneView {
         cx.notify();
     }
 
+    fn set_window_decoration(
+        &mut self,
+        decoration: WindowDecoration,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if self.settings.window_decoration == decoration {
+            return;
+        }
+        self.settings.window_decoration = decoration;
+        window.request_decorations(match decoration {
+            WindowDecoration::Ssd => WindowDecorations::Server,
+            WindowDecoration::Csd => WindowDecorations::Client,
+        });
+        self.persist_settings();
+        window.set_background_appearance(match window.window_decorations() {
+            Decorations::Client { .. } => WindowBackgroundAppearance::Transparent,
+            Decorations::Server => WindowBackgroundAppearance::Opaque,
+        });
+        window.refresh();
+        cx.notify();
+    }
+
     fn set_preferred_playback_quality(&mut self, quality: Quality, cx: &mut Context<Self>) {
         if self.settings.playback_quality == quality {
             return;
@@ -6570,6 +6624,21 @@ impl LyruneView {
                     )
             })
             .collect::<Vec<_>>();
+        let selected_window_decoration = self.settings.window_decoration;
+        let window_decoration_buttons = WindowDecoration::ALL
+            .into_iter()
+            .map(|decoration| {
+                Button::new(decoration.id())
+                    .label(decoration.label())
+                    .ghost()
+                    .flex_1()
+                    .h(px(38.))
+                    .selected(selected_window_decoration == decoration)
+                    .on_click(cx.listener(move |this, _, window, cx| {
+                        this.set_window_decoration(decoration, window, cx)
+                    }))
+            })
+            .collect::<Vec<_>>();
         let preferred_quality = self.settings.playback_quality;
         let quality_rows = Quality::ALL
             .chunks(2)
@@ -6671,6 +6740,26 @@ impl LyruneView {
                                                 .w_full()
                                                 .gap_1()
                                                 .children(tray_icon_buttons),
+                                        ),
+                                )
+                                .child(
+                                    v_flex()
+                                        .gap_2()
+                                        .pt_4()
+                                        .border_t_1()
+                                        .border_color(theme.border)
+                                        .child(div().font_medium().child("窗口装饰"))
+                                        .child(
+                                            div()
+                                                .text_xs()
+                                                .text_color(theme.muted_foreground)
+                                                .child("SSD 使用系统绘制标题栏；CSD 由 Lyrune 绘制窗口按钮和边框。切换后立即生效"),
+                                        )
+                                        .child(
+                                            h_flex()
+                                                .w_full()
+                                                .gap_1()
+                                                .children(window_decoration_buttons),
                                         ),
                                 )
                                 .child(
@@ -6818,32 +6907,34 @@ impl LyruneView {
             .into_any_element()
     }
 
-    fn render_sidebar(&mut self, cx: &mut Context<Self>) -> AnyElement {
+    fn render_sidebar(&mut self, window: &Window, cx: &mut Context<Self>) -> AnyElement {
         let theme = cx.theme();
+        let client_decorations = matches!(window.window_decorations(), Decorations::Client { .. });
+        let logo = h_flex()
+            .id("window-drag-logo")
+            .h(px(64.))
+            .mb_2()
+            .px_5()
+            .gap_3()
+            .child(lyrune_icon(self.settings.color_theme, px(42.)))
+            .child(
+                v_flex()
+                    .gap_0p5()
+                    .child(div().font_semibold().child("Lyrune"))
+                    .child(
+                        div()
+                            .text_xs()
+                            .text_color(theme.muted_foreground)
+                            .child("QQ Music Player"),
+                    ),
+            )
+            .when(client_decorations, |logo| self.window_drag_region(logo, cx));
         v_flex()
             .w_full()
             .h_full()
             .flex_shrink_0()
             .bg(theme.sidebar)
-            .child(
-                h_flex()
-                    .h(px(64.))
-                    .mb_2()
-                    .px_5()
-                    .gap_3()
-                    .child(lyrune_icon(self.settings.color_theme, px(42.)))
-                    .child(
-                        v_flex()
-                            .gap_0p5()
-                            .child(div().font_semibold().child("Lyrune"))
-                            .child(
-                                div()
-                                    .text_xs()
-                                    .text_color(theme.muted_foreground)
-                                    .child("QQ Music Player"),
-                            ),
-                    ),
-            )
+            .child(logo)
             .child(
                 h_flex().h(px(60.)).px_5().justify_between().child(
                     h_flex()
@@ -8467,16 +8558,21 @@ impl LyruneView {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Option<Hsla> {
-        blurred_cover(url, window, cx)
-            .and_then(Result::ok)
-            .map(|cover| readable_lyric_color(cover.sampled_rgb(narrow), overlay, preferred))
+        foreground_for_cover(
+            url,
+            overlay,
+            preferred,
+            |cover| cover.sampled_rgb(narrow),
+            window,
+            cx,
+        )
     }
 
-    fn lyric_foreground_target(
+    fn foreground_target(
         &self,
-        narrow: bool,
         overlay: Hsla,
         preferred: Hsla,
+        sample: impl Fn(&BlurredCover) -> [f32; 3],
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Option<Hsla> {
@@ -8487,8 +8583,7 @@ impl LyruneView {
         .into_iter()
         .flatten()
         {
-            if let Some(color) =
-                self.lyric_foreground_for_url(url, narrow, overlay, preferred, window, cx)
+            if let Some(color) = foreground_for_cover(url, overlay, preferred, &sample, window, cx)
             {
                 return Some(color);
             }
@@ -8522,10 +8617,10 @@ impl LyruneView {
             cx,
         );
         let edge_time_color = if self.cover_backdrop_expanded && hover_fraction.is_some() {
-            self.lyric_foreground_target(
-                narrow,
+            self.foreground_target(
                 theme.background.opacity(LYRIC_BACKGROUND_OVERLAY_OPACITY),
                 theme.foreground,
+                |cover| cover.sampled_rgb(narrow),
                 window,
                 cx,
             )
@@ -8843,6 +8938,7 @@ impl LyruneView {
         }
         let height = available_height * expansion_progress;
         let theme = cx.theme().clone();
+        let client_decorations = matches!(window.window_decorations(), Decorations::Client { .. });
 
         match self
             .current_track_data()
@@ -8908,6 +9004,25 @@ impl LyruneView {
                     (None, Some(current)) => current,
                     (None, None) => theme.foreground,
                 };
+                let collapse_lyric_foreground =
+                    current_lyric_foreground.unwrap_or(lyric_foreground);
+                let collapse_foreground_target = self
+                    .foreground_target(
+                        overlay,
+                        collapse_lyric_foreground,
+                        |cover| cover.collapse_rgb(),
+                        window,
+                        cx,
+                    )
+                    .unwrap_or(lyric_foreground);
+                let reveal_start = (1. - 54. / f32::from(available_height).max(54.)).clamp(0., 1.);
+                let control_color_progress =
+                    ((expansion_progress - reveal_start) / (1. - reveal_start)).clamp(0., 1.);
+                let collapse_foreground = interpolate_color(
+                    theme.foreground,
+                    collapse_foreground_target,
+                    control_color_progress,
+                );
                 let lyrics = if defer_new_lyrics {
                     div().into_any_element()
                 } else {
@@ -8920,6 +9035,81 @@ impl LyruneView {
                         cx,
                     )
                 };
+                let collapse_button = if client_decorations {
+                    div()
+                        .group("collapse-cover-backdrop")
+                        .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+                        .child(
+                            Button::new("collapse-cover-backdrop")
+                                .custom(
+                                    ButtonCustomVariant::new(cx)
+                                        .foreground(collapse_foreground)
+                                        .hover(theme.background.opacity(0.58))
+                                        .active(theme.background.opacity(0.58)),
+                                )
+                                .size(px(36.))
+                                .p_0()
+                                .child(
+                                    div()
+                                        .relative()
+                                        .size(px(16.))
+                                        .child(
+                                            div()
+                                                .absolute()
+                                                .inset_0()
+                                                .group_hover("collapse-cover-backdrop", |style| {
+                                                    style.opacity(0.)
+                                                })
+                                                .child(media_icon_hsla(
+                                                    MediaIcon::ChevronDown,
+                                                    collapse_foreground,
+                                                    px(16.),
+                                                )),
+                                        )
+                                        .child(
+                                            div()
+                                                .absolute()
+                                                .inset_0()
+                                                .opacity(0.)
+                                                .group_hover("collapse-cover-backdrop", |style| {
+                                                    style.opacity(1.)
+                                                })
+                                                .child(media_icon_hsla(
+                                                    MediaIcon::ChevronDown,
+                                                    theme.foreground,
+                                                    px(16.),
+                                                )),
+                                        ),
+                                )
+                                .on_click(cx.listener(|this, _, window, cx| {
+                                    this.set_cover_backdrop_expanded(false, window, cx);
+                                })),
+                        )
+                        .into_any_element()
+                } else {
+                    div()
+                        .id("collapse-cover-backdrop")
+                        .size(px(54.))
+                        .rounded_full()
+                        .bg(theme.background.opacity(0.58))
+                        .shadow_md()
+                        .cursor_pointer()
+                        .flex()
+                        .items_center()
+                        .justify_center()
+                        .hover(|style| style.bg(theme.background.opacity(0.78)))
+                        .child(media_icon_hsla(
+                            MediaIcon::ChevronDown,
+                            theme.foreground,
+                            px(29.),
+                        ))
+                        .on_click(cx.listener(|this, _, window, cx| {
+                            this.set_cover_backdrop_expanded(false, window, cx);
+                        }))
+                        .into_any_element()
+                };
+                let collapse_top = if client_decorations { px(18.) } else { px(24.) };
+                let collapse_left = if client_decorations { px(16.) } else { px(24.) };
                 let backdrop_images = div()
                     .absolute()
                     .inset_0()
@@ -9017,6 +9207,7 @@ impl LyruneView {
                     .occlude()
                     .child(
                         div()
+                            .id("lyrics-drag-region")
                             .absolute()
                             .left_0()
                             .right_0()
@@ -9033,28 +9224,14 @@ impl LyruneView {
                             .child(content)
                             .child(
                                 div()
-                                    .id("collapse-cover-backdrop")
                                     .absolute()
-                                    .top(px(24.))
-                                    .left(px(24.))
-                                    .size(px(54.))
-                                    .rounded_full()
-                                    .bg(theme.background.opacity(0.58))
-                                    .shadow_md()
-                                    .cursor_pointer()
-                                    .flex()
-                                    .items_center()
-                                    .justify_center()
-                                    .hover(|style| style.bg(theme.background.opacity(0.78)))
-                                    .child(media_icon_hsla(
-                                        MediaIcon::ChevronDown,
-                                        theme.foreground,
-                                        px(29.),
-                                    ))
-                                    .on_click(cx.listener(|this, _, window, cx| {
-                                        this.set_cover_backdrop_expanded(false, window, cx);
-                                    })),
-                            ),
+                                    .top(collapse_top)
+                                    .left(collapse_left)
+                                    .child(collapse_button),
+                            )
+                            .when(client_decorations, |region| {
+                                self.window_drag_region(region, cx)
+                            }),
                     )
                     .into_any_element()
             }
@@ -9532,6 +9709,145 @@ impl LyruneView {
             .into_any_element()
     }
 
+    fn render_window_controls(&self, window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
+        let theme = cx.theme().clone();
+        let available_height = (window.viewport_size().height - px(PLAYER_BAR_HEIGHT)).max(px(0.));
+        let expansion_progress = transition(
+            ("cover-backdrop", "expansion-progress"),
+            if self.cover_backdrop_expanded { 1. } else { 0. },
+            Transition::new(Duration::from_millis(320)),
+            window,
+            cx,
+        );
+        let lyrics_controls = self.cover_backdrop_expanded;
+        let reveal_start = (1. - 54. / f32::from(available_height).max(54.)).clamp(0., 1.);
+        let control_color_progress =
+            ((expansion_progress - reveal_start) / (1. - reveal_start)).clamp(0., 1.);
+        let control_foreground = if control_color_progress > 0. {
+            let narrow = window.viewport_size().width < px(900.);
+            let lyric_foreground = self
+                .foreground_target(
+                    theme.background.opacity(LYRIC_BACKGROUND_OVERLAY_OPACITY),
+                    theme.foreground,
+                    |cover| cover.sampled_rgb(narrow),
+                    window,
+                    cx,
+                )
+                .unwrap_or(theme.foreground);
+            let control_foreground = self
+                .foreground_target(
+                    theme.background.opacity(LYRIC_BACKGROUND_OVERLAY_OPACITY),
+                    lyric_foreground,
+                    |cover| cover.controls_rgb(),
+                    window,
+                    cx,
+                )
+                .unwrap_or(theme.foreground);
+            interpolate_color(theme.foreground, control_foreground, control_color_progress)
+        } else {
+            theme.foreground
+        };
+        let control_hover_background = theme.background.opacity(0.58);
+        let control_variant = ButtonCustomVariant::new(cx)
+            .foreground(control_foreground)
+            .hover(control_hover_background)
+            .active(control_hover_background);
+        let icon_foreground = if lyrics_controls {
+            control_foreground
+        } else {
+            theme.foreground
+        };
+        let icon = |group: &'static str, icon: MediaIcon| {
+            div()
+                .relative()
+                .size(px(16.))
+                .child(
+                    div()
+                        .absolute()
+                        .inset_0()
+                        .group_hover(group, |style| style.opacity(0.))
+                        .child(media_icon_hsla(icon, icon_foreground, px(16.))),
+                )
+                .child(
+                    div()
+                        .absolute()
+                        .inset_0()
+                        .opacity(0.)
+                        .group_hover(group, |style| style.opacity(1.))
+                        .child(media_icon_hsla(icon, theme.foreground, px(16.))),
+                )
+        };
+        h_flex()
+            .absolute()
+            .top(px(18.))
+            .right(px(16.))
+            .children([
+                div()
+                    .group("window-minimize")
+                    .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+                    .child(
+                        Button::new("window-minimize")
+                            .when(lyrics_controls, |button| button.custom(control_variant))
+                            .when(!lyrics_controls, |button| button.ghost())
+                            .size(px(36.))
+                            .p_0()
+                            .child(icon("window-minimize", MediaIcon::WindowMinimize))
+                            .on_click(|_, window, _| window.minimize_window()),
+                    ),
+                div()
+                    .group("window-maximize")
+                    .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+                    .child(
+                        Button::new("window-maximize")
+                            .when(lyrics_controls, |button| button.custom(control_variant))
+                            .when(!lyrics_controls, |button| button.ghost())
+                            .size(px(36.))
+                            .p_0()
+                            .child(icon(
+                                "window-maximize",
+                                if window.is_maximized() {
+                                    MediaIcon::WindowRestore
+                                } else {
+                                    MediaIcon::WindowMaximize
+                                },
+                            ))
+                            .on_click(|_, window, _| window.zoom_window()),
+                    ),
+                div()
+                    .group("window-close")
+                    .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+                    .child(
+                        Button::new("window-close")
+                            .when(lyrics_controls, |button| button.custom(control_variant))
+                            .when(!lyrics_controls, |button| button.ghost())
+                            .size(px(36.))
+                            .p_0()
+                            .child(icon("window-close", MediaIcon::WindowClose))
+                            .on_click(|_, window, _| window.remove_window()),
+                    ),
+            ])
+            .into_any_element()
+    }
+
+    fn window_drag_region(&self, region: Stateful<Div>, cx: &Context<Self>) -> Stateful<Div> {
+        region
+            .on_mouse_down_out(cx.listener(|this, _, _, _| this.window_drag_pressed = false))
+            .on_mouse_down(
+                MouseButton::Left,
+                cx.listener(|this, _, _, _| this.window_drag_pressed = true),
+            )
+            .on_mouse_up(
+                MouseButton::Left,
+                cx.listener(|this, _, _, _| this.window_drag_pressed = false),
+            )
+            .on_mouse_move(cx.listener(|this, _, window, _| {
+                if this.window_drag_pressed {
+                    this.window_drag_pressed = false;
+                    window.start_window_move();
+                }
+            }))
+    }
+
     fn render_main(&mut self, window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
         if self.cover_backdrop_expanded && self.playback_is_advancing() {
             if self.seek_preview.is_none() {
@@ -9545,6 +9861,7 @@ impl LyruneView {
         }
 
         let theme = cx.theme().clone();
+        let client_decorations = matches!(window.window_decorations(), Decorations::Client { .. });
         let compact = window.viewport_size().width < px(1120.);
         let narrow = window.viewport_size().width < px(900.);
         let scale_factor = window.scale_factor();
@@ -9578,6 +9895,9 @@ impl LyruneView {
                         .with_priority(5),
                     )
                 })
+                .when(client_decorations, |this| {
+                    this.child(deferred(self.render_window_controls(window, cx)).with_priority(20))
+                })
                 .into_any_element();
         }
         self.track_table.update(cx, |table, cx| {
@@ -9599,7 +9919,7 @@ impl LyruneView {
             .unwrap_or(default_sidebar_width)
             .clamp(min_sidebar_width, max_sidebar_width));
         let sidebar_range = px(min_sidebar_width)..px(max_sidebar_width);
-        let sidebar = self.render_sidebar(cx);
+        let sidebar = self.render_sidebar(window, cx);
         let page = match self.main_content {
             MainContent::Home => self.render_home(compact, narrow, scale_factor, cx),
             MainContent::Search => self.render_search(compact, narrow, scale_factor, cx),
@@ -9661,6 +9981,9 @@ impl LyruneView {
             );
         let navigation = h_flex()
             .gap_3()
+            .when(client_decorations, |this| {
+                this.flex_1().min_w_0().justify_center()
+            })
             .child(
                 Button::new("home")
                     .ghost()
@@ -9682,11 +10005,15 @@ impl LyruneView {
             .child(
                 div()
                     .id("search-input")
+                    .when(client_decorations, |this| {
+                        this.flex_1().min_w_0().max_w(search_width)
+                    })
                     .on_mouse_down_out(|_, window, _| window.blur())
                     .child(
                         Input::new(&self.search_input)
                             .large()
                             .w(search_width)
+                            .when(client_decorations, |this| this.w_full())
                             .border_2()
                             .rounded(px(999.))
                             .text_size(theme.font_size)
@@ -9709,28 +10036,44 @@ impl LyruneView {
                     .h(px(72.))
                     .w_full()
                     .flex_shrink_0()
-                    .child(
-                        h_flex()
-                            .size_full()
-                            .items_center()
-                            .justify_center()
-                            .child(navigation),
-                    )
-                    .child(
-                        div()
-                            .absolute()
-                            .top(px(14.))
-                            .left(px(24.))
-                            .child(history_navigation),
-                    )
-                    .child(
-                        div()
-                            .absolute()
-                            .top(px(17.))
-                            .right(px(24.))
-                            .size(px(44.))
-                            .child(account),
-                    ),
+                    .map(|header| {
+                        if client_decorations {
+                            header.child(
+                                h_flex()
+                                    .size_full()
+                                    .px_4()
+                                    .gap_2()
+                                    .child(history_navigation.flex_shrink_0())
+                                    .child(navigation)
+                                    .child(div().size(px(44.)).flex_shrink_0().child(account))
+                                    .child(div().w(px(108.)).flex_shrink_0()),
+                            )
+                        } else {
+                            header
+                                .child(
+                                    h_flex()
+                                        .size_full()
+                                        .items_center()
+                                        .justify_center()
+                                        .child(navigation),
+                                )
+                                .child(
+                                    div()
+                                        .absolute()
+                                        .top(px(14.))
+                                        .left(px(24.))
+                                        .child(history_navigation),
+                                )
+                                .child(
+                                    div()
+                                        .absolute()
+                                        .top(px(17.))
+                                        .right(px(24.))
+                                        .size(px(44.))
+                                        .child(account),
+                                )
+                        }
+                    }),
             )
             .child(page);
         v_flex()
@@ -9783,6 +10126,9 @@ impl LyruneView {
                     .with_priority(5),
                 )
             })
+            .when(client_decorations, |this| {
+                this.child(deferred(self.render_window_controls(window, cx)).with_priority(20))
+            })
             .into_any_element()
     }
 }
@@ -9808,7 +10154,16 @@ impl Render for LyruneView {
         if self.account_state == AccountState::SignedIn {
             self.render_main(window, cx)
         } else {
-            self.render_login(cx)
+            let client_decorations =
+                matches!(window.window_decorations(), Decorations::Client { .. });
+            div()
+                .relative()
+                .size_full()
+                .child(self.render_login(cx))
+                .when(client_decorations, |this| {
+                    this.child(deferred(self.render_window_controls(window, cx)).with_priority(20))
+                })
+                .into_any_element()
         }
     }
 }
