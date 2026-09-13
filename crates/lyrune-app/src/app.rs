@@ -2316,6 +2316,8 @@ pub struct LyruneView {
     account_menu_open: bool,
     _subscriptions: Vec<Subscription>,
     _window_subscription: Option<Subscription>,
+    #[cfg(target_os = "linux")]
+    _appearance_subscription: Option<Subscription>,
     window_tick_wake: Option<async_channel::Sender<()>>,
     background_tick_wake: Option<async_channel::Sender<()>>,
     lyric_animation_frame_pending: bool,
@@ -2656,6 +2658,8 @@ impl LyruneView {
             account_menu_open: false,
             _subscriptions: subscriptions,
             _window_subscription: None,
+            #[cfg(target_os = "linux")]
+            _appearance_subscription: None,
             window_tick_wake: None,
             background_tick_wake: None,
             lyric_animation_frame_pending: false,
@@ -2674,10 +2678,17 @@ impl LyruneView {
     }
 
     pub(crate) fn attach_window(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        window.set_window_title("Lyrune");
         self.lyric_animation_frame_pending = false;
         self.next_lyric_highlight_frame = None;
         self.next_lyric_scroll_frame = None;
         window.set_inactive_frame_interval(self.inactive_window_frame_interval());
+        #[cfg(target_os = "linux")]
+        {
+            self._appearance_subscription = Some(window.observe_window_appearance(|window, _| {
+                window.refresh();
+            }));
+        }
         self._window_subscription = Some(cx.observe_window_bounds(window, |this, window, _| {
             let size = window.window_bounds().get_bounds().size;
             let width = f32::from(size.width).round() as u32;
@@ -2930,6 +2941,10 @@ impl LyruneView {
 
     pub(crate) fn window_size(&self) -> Option<PersistedWindowSize> {
         self.settings.window_size
+    }
+
+    pub(crate) fn window_decoration(&self) -> WindowDecoration {
+        self.settings.window_decoration
     }
 
     #[cfg(target_os = "linux")]
@@ -5554,12 +5569,26 @@ impl LyruneView {
         cx.notify();
     }
 
-    fn set_window_decoration(&mut self, decoration: WindowDecoration, cx: &mut Context<Self>) {
+    fn set_window_decoration(
+        &mut self,
+        decoration: WindowDecoration,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         if self.settings.window_decoration == decoration {
             return;
         }
         self.settings.window_decoration = decoration;
+        window.request_decorations(match decoration {
+            WindowDecoration::Ssd => WindowDecorations::Server,
+            WindowDecoration::Csd => WindowDecorations::Client,
+        });
         self.persist_settings();
+        window.set_background_appearance(match window.window_decorations() {
+            Decorations::Client { .. } => WindowBackgroundAppearance::Transparent,
+            Decorations::Server => WindowBackgroundAppearance::Opaque,
+        });
+        window.refresh();
         cx.notify();
     }
 
@@ -6580,21 +6609,20 @@ impl LyruneView {
             })
             .collect::<Vec<_>>();
         let selected_window_decoration = self.settings.window_decoration;
-        let window_decoration_buttons =
-            WindowDecoration::ALL
-                .into_iter()
-                .map(|decoration| {
-                    Button::new(decoration.id())
-                        .label(decoration.label())
-                        .ghost()
-                        .flex_1()
-                        .h(px(38.))
-                        .selected(selected_window_decoration == decoration)
-                        .on_click(cx.listener(move |this, _, _, cx| {
-                            this.set_window_decoration(decoration, cx)
-                        }))
-                })
-                .collect::<Vec<_>>();
+        let window_decoration_buttons = WindowDecoration::ALL
+            .into_iter()
+            .map(|decoration| {
+                Button::new(decoration.id())
+                    .label(decoration.label())
+                    .ghost()
+                    .flex_1()
+                    .h(px(38.))
+                    .selected(selected_window_decoration == decoration)
+                    .on_click(cx.listener(move |this, _, window, cx| {
+                        this.set_window_decoration(decoration, window, cx)
+                    }))
+            })
+            .collect::<Vec<_>>();
         let preferred_quality = self.settings.playback_quality;
         let quality_rows = Quality::ALL
             .chunks(2)
@@ -6709,7 +6737,7 @@ impl LyruneView {
                                             div()
                                                 .text_xs()
                                                 .text_color(theme.muted_foreground)
-                                                .child("SSD 使用系统绘制标题栏；CSD 由 Lyrune 绘制窗口按钮和边框"),
+                                                .child("SSD 使用系统绘制标题栏；CSD 由 Lyrune 绘制窗口按钮和边框。切换后立即生效"),
                                         )
                                         .child(
                                             h_flex()
@@ -9577,6 +9605,58 @@ impl LyruneView {
             .into_any_element()
     }
 
+    fn render_window_controls(&self, window: &Window, cx: &mut Context<Self>) -> AnyElement {
+        let theme = cx.theme().clone();
+        h_flex()
+            .absolute()
+            .top(px(18.))
+            .right(px(16.))
+            .children([
+                Button::new("window-minimize")
+                    .ghost()
+                    .size(px(36.))
+                    .p_0()
+                    .tooltip("最小化")
+                    .child(media_icon_hsla(
+                        MediaIcon::WindowMinimize,
+                        theme.foreground,
+                        px(16.),
+                    ))
+                    .on_click(|_, window, _| window.minimize_window()),
+                Button::new("window-maximize")
+                    .ghost()
+                    .size(px(36.))
+                    .p_0()
+                    .tooltip(if window.is_maximized() {
+                        "还原"
+                    } else {
+                        "最大化"
+                    })
+                    .child(media_icon_hsla(
+                        if window.is_maximized() {
+                            MediaIcon::WindowRestore
+                        } else {
+                            MediaIcon::WindowMaximize
+                        },
+                        theme.foreground,
+                        px(16.),
+                    ))
+                    .on_click(|_, window, _| window.zoom_window()),
+                Button::new("window-close")
+                    .ghost()
+                    .size(px(36.))
+                    .p_0()
+                    .tooltip("关闭窗口")
+                    .child(media_icon_hsla(
+                        MediaIcon::WindowClose,
+                        theme.foreground,
+                        px(16.),
+                    ))
+                    .on_click(|_, window, _| window.remove_window()),
+            ])
+            .into_any_element()
+    }
+
     fn render_main(&mut self, window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
         if self.cover_backdrop_expanded && self.playback_is_advancing() {
             if self.seek_preview.is_none() {
@@ -9590,6 +9670,7 @@ impl LyruneView {
         }
 
         let theme = cx.theme().clone();
+        let client_decorations = matches!(window.window_decorations(), Decorations::Client { .. });
         let compact = window.viewport_size().width < px(1120.);
         let narrow = window.viewport_size().width < px(900.);
         let scale_factor = window.scale_factor();
@@ -9706,6 +9787,7 @@ impl LyruneView {
             );
         let navigation = h_flex()
             .gap_3()
+            .when(client_decorations, |this| this.flex_1().min_w_0())
             .child(
                 Button::new("home")
                     .ghost()
@@ -9727,11 +9809,15 @@ impl LyruneView {
             .child(
                 div()
                     .id("search-input")
+                    .when(client_decorations, |this| {
+                        this.flex_1().min_w_0().max_w(search_width)
+                    })
                     .on_mouse_down_out(|_, window, _| window.blur())
                     .child(
                         Input::new(&self.search_input)
                             .large()
                             .w(search_width)
+                            .when(client_decorations, |this| this.w_full())
                             .border_2()
                             .rounded(px(999.))
                             .text_size(theme.font_size)
@@ -9754,28 +9840,44 @@ impl LyruneView {
                     .h(px(72.))
                     .w_full()
                     .flex_shrink_0()
-                    .child(
-                        h_flex()
-                            .size_full()
-                            .items_center()
-                            .justify_center()
-                            .child(navigation),
-                    )
-                    .child(
-                        div()
-                            .absolute()
-                            .top(px(14.))
-                            .left(px(24.))
-                            .child(history_navigation),
-                    )
-                    .child(
-                        div()
-                            .absolute()
-                            .top(px(17.))
-                            .right(px(24.))
-                            .size(px(44.))
-                            .child(account),
-                    ),
+                    .map(|header| {
+                        if client_decorations {
+                            header.child(
+                                h_flex()
+                                    .size_full()
+                                    .px_4()
+                                    .gap_2()
+                                    .child(history_navigation.flex_shrink_0())
+                                    .child(navigation)
+                                    .child(div().size(px(44.)).flex_shrink_0().child(account))
+                                    .child(div().w(px(108.)).flex_shrink_0()),
+                            )
+                        } else {
+                            header
+                                .child(
+                                    h_flex()
+                                        .size_full()
+                                        .items_center()
+                                        .justify_center()
+                                        .child(navigation),
+                                )
+                                .child(
+                                    div()
+                                        .absolute()
+                                        .top(px(14.))
+                                        .left(px(24.))
+                                        .child(history_navigation),
+                                )
+                                .child(
+                                    div()
+                                        .absolute()
+                                        .top(px(17.))
+                                        .right(px(24.))
+                                        .size(px(44.))
+                                        .child(account),
+                                )
+                        }
+                    }),
             )
             .child(page);
         v_flex()
@@ -9850,11 +9952,19 @@ impl Drop for LyruneView {
 
 impl Render for LyruneView {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        if self.account_state == AccountState::SignedIn {
+        let content = if self.account_state == AccountState::SignedIn {
             self.render_main(window, cx)
         } else {
             self.render_login(cx)
-        }
+        };
+        let client_decorations = matches!(window.window_decorations(), Decorations::Client { .. });
+        div()
+            .relative()
+            .size_full()
+            .child(content)
+            .when(client_decorations, |this| {
+                this.child(deferred(self.render_window_controls(window, cx)).with_priority(20))
+            })
     }
 }
 
