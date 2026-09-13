@@ -9038,6 +9038,7 @@ impl LyruneView {
                 let collapse_button = if client_decorations {
                     div()
                         .group("collapse-cover-backdrop")
+                        .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
                         .child(
                             Button::new("collapse-cover-backdrop")
                                 .custom(
@@ -9781,40 +9782,49 @@ impl LyruneView {
             .top(px(18.))
             .right(px(16.))
             .children([
-                div().group("window-minimize").child(
-                    Button::new("window-minimize")
-                        .when(lyrics_controls, |button| button.custom(control_variant))
-                        .when(!lyrics_controls, |button| button.ghost())
-                        .size(px(36.))
-                        .p_0()
-                        .child(icon("window-minimize", MediaIcon::WindowMinimize))
-                        .on_click(|_, window, _| window.minimize_window()),
-                ),
-                div().group("window-maximize").child(
-                    Button::new("window-maximize")
-                        .when(lyrics_controls, |button| button.custom(control_variant))
-                        .when(!lyrics_controls, |button| button.ghost())
-                        .size(px(36.))
-                        .p_0()
-                        .child(icon(
-                            "window-maximize",
-                            if window.is_maximized() {
-                                MediaIcon::WindowRestore
-                            } else {
-                                MediaIcon::WindowMaximize
-                            },
-                        ))
-                        .on_click(|_, window, _| window.zoom_window()),
-                ),
-                div().group("window-close").child(
-                    Button::new("window-close")
-                        .when(lyrics_controls, |button| button.custom(control_variant))
-                        .when(!lyrics_controls, |button| button.ghost())
-                        .size(px(36.))
-                        .p_0()
-                        .child(icon("window-close", MediaIcon::WindowClose))
-                        .on_click(|_, window, _| window.remove_window()),
-                ),
+                div()
+                    .group("window-minimize")
+                    .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+                    .child(
+                        Button::new("window-minimize")
+                            .when(lyrics_controls, |button| button.custom(control_variant))
+                            .when(!lyrics_controls, |button| button.ghost())
+                            .size(px(36.))
+                            .p_0()
+                            .child(icon("window-minimize", MediaIcon::WindowMinimize))
+                            .on_click(|_, window, _| window.minimize_window()),
+                    ),
+                div()
+                    .group("window-maximize")
+                    .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+                    .child(
+                        Button::new("window-maximize")
+                            .when(lyrics_controls, |button| button.custom(control_variant))
+                            .when(!lyrics_controls, |button| button.ghost())
+                            .size(px(36.))
+                            .p_0()
+                            .child(icon(
+                                "window-maximize",
+                                if window.is_maximized() {
+                                    MediaIcon::WindowRestore
+                                } else {
+                                    MediaIcon::WindowMaximize
+                                },
+                            ))
+                            .on_click(|_, window, _| window.zoom_window()),
+                    ),
+                div()
+                    .group("window-close")
+                    .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+                    .child(
+                        Button::new("window-close")
+                            .when(lyrics_controls, |button| button.custom(control_variant))
+                            .when(!lyrics_controls, |button| button.ghost())
+                            .size(px(36.))
+                            .p_0()
+                            .child(icon("window-close", MediaIcon::WindowClose))
+                            .on_click(|_, window, _| window.remove_window()),
+                    ),
             ])
             .into_any_element()
     }
