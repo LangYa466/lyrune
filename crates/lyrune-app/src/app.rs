@@ -7329,7 +7329,7 @@ impl LyruneView {
                                                 .text_color(theme.primary_foreground)
                                                 .child(media_icon(
                                                     MediaIcon::Play,
-                                                    self.color_theme.icon_on_accent(),
+                                                    self.color_theme.palette().primary_foreground,
                                                     px(17.),
                                                 ))
                                                 .child("播放全部"),
@@ -7508,7 +7508,7 @@ impl LyruneView {
                                                 .text_color(theme.primary_foreground)
                                                 .child(media_icon(
                                                     MediaIcon::Play,
-                                                    self.color_theme.icon_on_accent(),
+                                                    self.color_theme.palette().primary_foreground,
                                                     px(17.),
                                                 ))
                                                 .child("播放全部"),
@@ -9389,8 +9389,9 @@ impl LyruneView {
         } else {
             is_playing
         };
-        let icon_foreground = self.color_theme.icon_foreground();
-        let icon_accent = self.color_theme.icon_accent();
+        let palette = self.color_theme.palette();
+        let icon_foreground = palette.foreground;
+        let icon_accent = palette.primary;
         let cover_size = if narrow { px(44.) } else { px(52.) };
         let cover = match track.as_ref().and_then(|track| track.cover_url.clone()) {
             Some(url) => div()
@@ -9711,7 +9712,7 @@ impl LyruneView {
                                         } else {
                                             MediaIcon::Play
                                         },
-                                        self.color_theme.icon_on_accent(),
+                                        self.color_theme.palette().primary_foreground,
                                         px(21.),
                                     ))
                                     .on_click(

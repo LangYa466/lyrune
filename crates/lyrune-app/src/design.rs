@@ -70,16 +70,6 @@ pub enum ColorTheme {
     DraculaDark,
 }
 
-#[derive(Clone, Copy)]
-pub(crate) struct LogoPalette {
-    pub(crate) background: &'static str,
-    pub(crate) foreground: &'static str,
-    pub(crate) trail_primary: &'static str,
-    pub(crate) trail_secondary: &'static str,
-    pub(crate) trail_tertiary: &'static str,
-    pub(crate) detail: &'static str,
-}
-
 impl ColorTheme {
     pub const ALL: [Self; 17] = [
         Self::EverforestLight,
@@ -145,214 +135,7 @@ impl ColorTheme {
         }
     }
 
-    pub const fn icon_foreground(self) -> &'static str {
-        match self {
-            Self::CatppuccinLatte => "#4c4f69",
-            Self::CatppuccinMocha => "#cdd6f4",
-            Self::AyuLight => "#5c6166",
-            Self::AyuDark => "#b3b1ad",
-            Self::EverforestLight => "#5c6a72",
-            Self::EverforestDark => "#d3c6aa",
-            Self::RosePineDawn => "#575279",
-            Self::RosePineMoon => "#e0def4",
-            Self::KanagawaLotus => "#545464",
-            Self::KanagawaWave => "#dcd7ba",
-            Self::AyuMirage => "#cbccc6",
-            Self::OneDark => "#abb2bf",
-            Self::OneLight => "#383a42",
-            Self::GruvboxLight => "#654735",
-            Self::GruvboxDark => "#ebdbb2",
-            Self::DraculaLight => "#424450",
-            Self::DraculaDark => "#f8f8f2",
-        }
-    }
-
-    pub const fn icon_accent(self) -> &'static str {
-        match self {
-            Self::CatppuccinLatte => "#1e66f5",
-            Self::CatppuccinMocha => "#89b4fa",
-            Self::AyuLight => "#22a4e6",
-            Self::AyuDark => "#5ac1fe",
-            Self::EverforestLight => "#f57d26",
-            Self::EverforestDark => "#e69875",
-            Self::RosePineDawn => "#907aa9",
-            Self::RosePineMoon => "#c4a7e7",
-            Self::KanagawaLotus => "#4d699b",
-            Self::KanagawaWave => "#7e9cd8",
-            Self::AyuMirage => "#ffcc66",
-            Self::OneDark => "#61afef",
-            Self::OneLight => "#4078f2",
-            Self::GruvboxLight => "#af3a03",
-            Self::GruvboxDark => "#fabd2f",
-            Self::DraculaLight => "#644bcb",
-            Self::DraculaDark => "#bd93f9",
-        }
-    }
-
-    pub const fn icon_on_accent(self) -> &'static str {
-        match self {
-            Self::CatppuccinLatte => "#eff1f5",
-            Self::CatppuccinMocha => "#1e1e2e",
-            Self::AyuLight => "#ffffff",
-            Self::AyuDark => "#1f2430",
-            Self::EverforestLight => "#fdf6e3",
-            Self::EverforestDark => "#262e34",
-            Self::RosePineDawn => "#faf4ed",
-            Self::RosePineMoon => "#232136",
-            Self::KanagawaLotus => "#f2ecbc",
-            Self::KanagawaWave => "#1f1f28",
-            Self::AyuMirage => "#1f2430",
-            Self::OneDark => "#282c34",
-            Self::OneLight => "#fafafa",
-            Self::GruvboxLight => "#fbf1c7",
-            Self::GruvboxDark => "#282828",
-            Self::DraculaLight => "#f8f8f2",
-            Self::DraculaDark => "#282a36",
-        }
-    }
-
-    pub(crate) const fn logo_palette(self) -> LogoPalette {
-        match self {
-            Self::CatppuccinLatte => LogoPalette {
-                background: "#ccd0da",
-                foreground: "#4c4f69",
-                trail_primary: "#1e66f5",
-                trail_secondary: "#179299",
-                trail_tertiary: "#fe640b",
-                detail: "#d20f39",
-            },
-            Self::CatppuccinMocha => LogoPalette {
-                background: "#313244",
-                foreground: "#cdd6f4",
-                trail_primary: "#89b4fa",
-                trail_secondary: "#94e2d5",
-                trail_tertiary: "#fab387",
-                detail: "#f38ba8",
-            },
-            Self::AyuLight => LogoPalette {
-                background: "#ebeef0",
-                foreground: "#5c6166",
-                trail_primary: "#22a4e6",
-                trail_secondary: "#4cbf99",
-                trail_tertiary: "#e59645",
-                detail: "#f07171",
-            },
-            Self::AyuDark => LogoPalette {
-                background: "#1f2127",
-                foreground: "#b3b1ad",
-                trail_primary: "#5ac1fe",
-                trail_secondary: "#95e6cb",
-                trail_tertiary: "#ffb454",
-                detail: "#f07178",
-            },
-            Self::EverforestLight => LogoPalette {
-                background: "#efebd4",
-                foreground: "#5c6a72",
-                trail_primary: "#3a94c5",
-                trail_secondary: "#35a77c",
-                trail_tertiary: "#f57d26",
-                detail: "#f85552",
-            },
-            Self::EverforestDark => LogoPalette {
-                background: "#343f44",
-                foreground: "#d3c6aa",
-                trail_primary: "#7fbbb3",
-                trail_secondary: "#83c092",
-                trail_tertiary: "#e69875",
-                detail: "#e67e80",
-            },
-            Self::RosePineDawn => LogoPalette {
-                background: "#f2e9e1",
-                foreground: "#575279",
-                trail_primary: "#907aa9",
-                trail_secondary: "#56949f",
-                trail_tertiary: "#ea9d34",
-                detail: "#b4637a",
-            },
-            Self::RosePineMoon => LogoPalette {
-                background: "#393552",
-                foreground: "#e0def4",
-                trail_primary: "#c4a7e7",
-                trail_secondary: "#9ccfd8",
-                trail_tertiary: "#f6c177",
-                detail: "#eb6f92",
-            },
-            Self::KanagawaLotus => LogoPalette {
-                background: "#e7dba0",
-                foreground: "#545464",
-                trail_primary: "#4d699b",
-                trail_secondary: "#597b75",
-                trail_tertiary: "#cc6d00",
-                detail: "#b35b79",
-            },
-            Self::KanagawaWave => LogoPalette {
-                background: "#2a2a37",
-                foreground: "#dcd7ba",
-                trail_primary: "#7e9cd8",
-                trail_secondary: "#7aa89f",
-                trail_tertiary: "#e6c384",
-                detail: "#d27e99",
-            },
-            Self::AyuMirage => LogoPalette {
-                background: "#1f2430",
-                foreground: "#cbccc6",
-                trail_primary: "#ffcc66",
-                trail_secondary: "#95e6cb",
-                trail_tertiary: "#f29e74",
-                detail: "#f28779",
-            },
-            Self::OneDark => LogoPalette {
-                background: "#282c34",
-                foreground: "#abb2bf",
-                trail_primary: "#61afef",
-                trail_secondary: "#56b6c2",
-                trail_tertiary: "#e5c07b",
-                detail: "#e06c75",
-            },
-            Self::OneLight => LogoPalette {
-                background: "#fafafa",
-                foreground: "#383a42",
-                trail_primary: "#4078f2",
-                trail_secondary: "#0184bc",
-                trail_tertiary: "#c18401",
-                detail: "#ca1243",
-            },
-            Self::GruvboxLight => LogoPalette {
-                background: "#fbf1c7",
-                foreground: "#654735",
-                trail_primary: "#af3a03",
-                trail_secondary: "#427b58",
-                trail_tertiary: "#b57614",
-                detail: "#9d0006",
-            },
-            Self::GruvboxDark => LogoPalette {
-                background: "#282828",
-                foreground: "#ebdbb2",
-                trail_primary: "#fabd2f",
-                trail_secondary: "#8ec07c",
-                trail_tertiary: "#fe8019",
-                detail: "#fb4934",
-            },
-            Self::DraculaLight => LogoPalette {
-                background: "#f8f8f2",
-                foreground: "#424450",
-                trail_primary: "#644bcb",
-                trail_secondary: "#159a9c",
-                trail_tertiary: "#c18401",
-                detail: "#a3004c",
-            },
-            Self::DraculaDark => LogoPalette {
-                background: "#282a36",
-                foreground: "#f8f8f2",
-                trail_primary: "#bd93f9",
-                trail_secondary: "#50fa7b",
-                trail_tertiary: "#ffb86c",
-                detail: "#ff5555",
-            },
-        }
-    }
-
-    fn palette(self) -> Palette {
+    pub(crate) const fn palette(self) -> Palette {
         match self {
             Self::CatppuccinLatte => Palette {
                 background: "#eff1f5",
@@ -766,29 +549,29 @@ impl ColorTheme {
     }
 }
 
-struct Palette {
-    background: &'static str,
-    surface: &'static str,
-    surface_alt: &'static str,
-    sidebar: &'static str,
-    outer: &'static str,
-    foreground: &'static str,
-    subtext_foreground: &'static str,
-    muted: &'static str,
-    muted_foreground: &'static str,
-    border: &'static str,
-    primary: &'static str,
-    primary_foreground: &'static str,
-    primary_hover: &'static str,
-    primary_active: &'static str,
-    accent: &'static str,
-    accent_foreground: &'static str,
-    active: &'static str,
-    hover: &'static str,
-    ring: &'static str,
-    emotion: &'static str,
-    emotion_foreground: &'static str,
-    scrollbar_thumb: &'static str,
+pub struct Palette {
+    pub background: &'static str,
+    pub surface: &'static str,
+    pub surface_alt: &'static str,
+    pub sidebar: &'static str,
+    pub outer: &'static str,
+    pub foreground: &'static str,
+    pub subtext_foreground: &'static str,
+    pub muted: &'static str,
+    pub muted_foreground: &'static str,
+    pub border: &'static str,
+    pub primary: &'static str,
+    pub primary_foreground: &'static str,
+    pub primary_hover: &'static str,
+    pub primary_active: &'static str,
+    pub accent: &'static str,
+    pub accent_foreground: &'static str,
+    pub active: &'static str,
+    pub hover: &'static str,
+    pub ring: &'static str,
+    pub emotion: &'static str,
+    pub emotion_foreground: &'static str,
+    pub scrollbar_thumb: &'static str,
 }
 
 pub(crate) fn apply(
