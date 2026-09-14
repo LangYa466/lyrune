@@ -4002,6 +4002,7 @@ name = "lyrune"
 version = "1.3.0"
 dependencies = [
  "anyhow",
+ "ashpd",
  "async-channel",
  "bytes",
  "directories",
@@ -4028,6 +4029,7 @@ dependencies = [
  "tray-icon",
  "wana_kana",
  "xxhash-rust",
+ "zbus_systemd",
 ]
 
 [[package]]
@@ -9653,6 +9655,16 @@ dependencies = [
  "serde",
  "winnow 1.0.4",
  "zvariant",
+]
+
+[[package]]
+name = "zbus_systemd"
+version = "0.26100.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "4508893b3fc7829cbd654a318942b0716fb08da8a272a646a970f382cfb7d27e"
+dependencies = [
+ "serde",
+ "zbus",
 ]
 
 [[package]]
