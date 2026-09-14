@@ -362,6 +362,7 @@ pub enum SongQuality {
 ///
 /// 来自 [`LoginSession::status`][`crate::client::LoginSession::status`] 的轮询结果。
 #[derive(Clone, Debug, Deserialize, Serialize)]
+#[allow(clippy::large_enum_variant)]
 pub enum LoginStatus {
     /// 登录成功并返回 token。
     Success(LoginToken),

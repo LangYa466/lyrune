@@ -33,7 +33,7 @@ fn icon_rgba(style: TrayIconStyle) -> Vec<u8> {
     );
 
     let mut pixels = pixmap.take();
-    for pixel in pixels.chunks_exact_mut(4) {
+    for pixel in pixels.as_chunks_mut::<4>().0 {
         let alpha = u16::from(pixel[3]);
         if alpha == 0 || alpha == 255 {
             continue;
@@ -56,7 +56,7 @@ mod platform {
 
     fn icon(style: TrayIconStyle) -> ksni::Icon {
         let mut data = icon_rgba(style);
-        for pixel in data.chunks_exact_mut(4) {
+        for pixel in data.as_chunks_mut::<4>().0 {
             pixel.rotate_right(1);
         }
         ksni::Icon {
@@ -246,7 +246,9 @@ mod tests {
 
         let icon = icon_rgba(TrayIconStyle::Color);
         assert!(
-            icon.chunks_exact(4)
+            icon.as_chunks::<4>()
+                .0
+                .iter()
                 .filter(|pixel| pixel[3] == 255)
                 .map(|pixel| [pixel[0], pixel[1], pixel[2]])
                 .collect::<std::collections::HashSet<_>>()

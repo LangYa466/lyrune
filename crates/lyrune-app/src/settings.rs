@@ -631,10 +631,12 @@ mod tests {
 
     #[test]
     fn theme_mode_does_not_restrict_theme_choices() {
-        let mut settings = AppSettings::default();
-        settings.color_theme_mode = ColorThemeMode::Light;
-        settings.light_color_theme = ColorTheme::AyuDark;
-        settings.dark_color_theme = ColorTheme::RosePineDawn;
+        let settings = AppSettings {
+            color_theme_mode: ColorThemeMode::Light,
+            light_color_theme: ColorTheme::AyuDark,
+            dark_color_theme: ColorTheme::RosePineDawn,
+            ..Default::default()
+        };
         assert_eq!(
             settings.active_color_theme(WindowAppearance::Dark),
             ColorTheme::AyuDark

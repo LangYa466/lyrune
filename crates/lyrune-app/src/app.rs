@@ -14,14 +14,15 @@ use gpui_base::{
     motion::{Transition, transition},
 };
 use gpui_component::{
-    ActiveTheme as _, Disableable as _, IndexPath, ResizableState, Selectable as _, Sizable as _,
-    StyledExt as _,
+    ActiveTheme as _, Disableable as _, IndexPath, ResizableState, Root, Selectable as _,
+    Sizable as _, StyledExt as _, Theme, WindowExt as _,
     avatar::Avatar,
     button::{Button, ButtonCustomVariant, ButtonVariants as _},
     h_flex, h_resizable,
     input::{Input, InputEvent, InputState, MaskPattern, NumberInput},
     list::{List, ListEvent, ListState},
     menu::{DropdownMenu as _, PopupMenuItem},
+    notification::Notification,
     resizable_panel,
     scroll::ScrollableElement as _,
     slider::{Slider, SliderEvent, SliderState},
@@ -636,6 +637,7 @@ impl LyricLayoutCache {
             .collect();
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn line(
         &mut self,
         index: usize,
@@ -734,6 +736,7 @@ impl PreparedLyricsElement {
         )
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn paint_line(
         line: &PreparedLyricLine,
         origin: Point<Pixels>,
@@ -1774,6 +1777,7 @@ impl SearchVisibleCounts {
     }
 }
 
+#[derive(Default)]
 struct SearchResource {
     results: Option<SharedSearchResults>,
     loading: bool,
@@ -1781,17 +1785,7 @@ struct SearchResource {
     error: Option<String>,
 }
 
-impl Default for SearchResource {
-    fn default() -> Self {
-        Self {
-            results: None,
-            loading: false,
-            loading_more: [false; 4],
-            error: None,
-        }
-    }
-}
-
+#[derive(Default)]
 struct ArtistResource {
     songs: Option<SharedSearchPage<Track>>,
     track_count: u64,
@@ -1802,22 +1796,6 @@ struct ArtistResource {
     albums_loading: bool,
     albums_loading_more: bool,
     album_error: Option<String>,
-}
-
-impl Default for ArtistResource {
-    fn default() -> Self {
-        Self {
-            songs: None,
-            track_count: 0,
-            songs_loading: false,
-            songs_loading_more: false,
-            song_error: None,
-            albums: None,
-            albums_loading: false,
-            albums_loading_more: false,
-            album_error: None,
-        }
-    }
 }
 
 struct PlaylistResource {
@@ -2197,26 +2175,7 @@ enum PlaybackLoadEvent {
     Finished(anyhow::Result<(PreparedPlayback, PlaybackLocation, Vec<Quality>)>),
 }
 
-struct StatusMessage {
-    text: String,
-    is_error: bool,
-}
-
-impl StatusMessage {
-    fn info(text: impl Into<String>) -> Self {
-        Self {
-            text: text.into(),
-            is_error: false,
-        }
-    }
-
-    fn error(text: impl Into<String>) -> Self {
-        Self {
-            text: text.into(),
-            is_error: true,
-        }
-    }
-}
+struct GlobalErrorNotification;
 
 impl RepeatMode {
     fn next(self) -> Self {
@@ -2330,7 +2289,8 @@ pub struct LyruneView {
     pending_playback_restore: Option<PersistedPlayback>,
     last_playback_persisted_at: Instant,
 
-    status: StatusMessage,
+    login_message: String,
+    window_handle: AnyWindowHandle,
     login_generation: u64,
     play_generation: u64,
     account_menu_open: bool,
@@ -2357,23 +2317,24 @@ impl LyruneView {
         fonts: AppFonts,
         cx: &mut Context<Self>,
     ) -> Self {
-        let (audio, mut initial_status, mut initial_status_is_error) = match AudioPlayer::new() {
+        let mut initial_errors = Vec::new();
+        let audio = match AudioPlayer::new() {
             Ok(player) => {
                 player.set_volume(settings.volume);
-                (Some(player), "正在读取已保存的登录状态…".to_owned(), false)
+                Some(player)
             }
-            Err(error) => (
-                None,
-                format!("音频设备初始化失败：{error:#}；仍可浏览 QQ 音乐歌单"),
-                true,
-            ),
+            Err(error) => {
+                initial_errors.push(format!(
+                    "音频设备初始化失败：{error:#}；仍可浏览 QQ 音乐歌单"
+                ));
+                None
+            }
         };
         let audio_cache =
             match AudioCache::new(audio_cache_limit_bytes(settings.audio_cache_limit_gb)) {
                 Ok(cache) => Some(cache),
                 Err(error) => {
-                    initial_status = format!("{initial_status}；音频缓存初始化失败：{error:#}");
-                    initial_status_is_error = true;
+                    initial_errors.push(format!("音频缓存初始化失败：{error:#}"));
                     None
                 }
             };
@@ -2381,16 +2342,14 @@ impl LyruneView {
         let cdn_cache = match CdnCacheStore::load() {
             Ok(cache) => cache,
             Err(error) => {
-                initial_status = format!("{initial_status}；CDN 缓存读取失败：{error:#}");
-                initial_status_is_error = true;
+                initial_errors.push(format!("CDN 缓存读取失败：{error:#}"));
                 Default::default()
             }
         };
         let protocol_client = match ProtocolClient::new_with_cdn_cache(cdn_cache) {
             Ok(client) => Some(client),
             Err(error) => {
-                initial_status = format!("{initial_status}；QQ 音乐客户端初始化失败：{error:#}");
-                initial_status_is_error = true;
+                initial_errors.push(format!("QQ 音乐客户端初始化失败：{error:#}"));
                 None
             }
         };
@@ -2671,11 +2630,8 @@ impl LyruneView {
             repeat_mode: RepeatMode::Off,
             pending_playback_restore,
             last_playback_persisted_at: Instant::now(),
-            status: if initial_status_is_error {
-                StatusMessage::error(initial_status)
-            } else {
-                StatusMessage::info(initial_status)
-            },
+            login_message: "正在读取已保存的登录状态…".to_owned(),
+            window_handle: window.window_handle(),
             login_generation: 0,
             play_generation: 0,
             account_menu_open: false,
@@ -2695,6 +2651,9 @@ impl LyruneView {
             last_mpris_position_sync: Instant::now(),
         };
         view.attach_window(window, cx);
+        if !initial_errors.is_empty() {
+            view.notify_error(initial_errors.join("；"), cx);
+        }
         view.start_audio_cache_maintenance();
         view.start_cdn_maintenance();
         view.restore_credential(cx);
@@ -2703,6 +2662,8 @@ impl LyruneView {
 
     pub(crate) fn attach_window(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         window.set_window_title("Lyrune");
+        self.window_handle = window.window_handle();
+        Theme::global_mut(cx).notification.margins.bottom = px(PLAYER_BAR_HEIGHT + 16.);
         self.lyric_animation_frame_pending = false;
         self.next_lyric_highlight_frame = None;
         self.next_lyric_scroll_frame = None;
@@ -2721,6 +2682,24 @@ impl LyruneView {
         }));
         self.sync_progress_slider(window, cx);
         self.start_window_tick(window, cx);
+    }
+
+    fn notify_error(&self, message: impl Into<String>, cx: &mut Context<Self>) {
+        let window_handle = self.window_handle;
+        let notification = Notification::new()
+            .message(message.into())
+            .id::<GlobalErrorNotification>()
+            .bg(cx.theme().danger)
+            .text_color(cx.theme().danger_foreground)
+            .border_0()
+            .rounded(px(9.))
+            .w(px(440.))
+            .py_3();
+        cx.defer(move |cx| {
+            let _ = window_handle.update(cx, |_, window, cx| {
+                window.push_notification(notification, cx);
+            });
+        });
     }
 
     fn start_window_tick(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -3052,7 +3031,6 @@ impl LyruneView {
                 Ok(Some(credential)) => {
                     this.account_state = AccountState::SignedIn;
                     this.main_content = MainContent::Home;
-                    this.status = StatusMessage::info("已恢复 QQ 音乐登录，正在加载音乐库…");
                     this.install_credential_session(credential, cx);
                     this.load_home(cx);
                     this.load_library(false, cx);
@@ -3063,9 +3041,7 @@ impl LyruneView {
                 }
                 Err(error) => {
                     this.account_state = AccountState::SignedOut;
-                    this.status = StatusMessage::error(format!(
-                        "无法恢复登录：{error:#}；正在加载登录二维码…"
-                    ));
+                    this.notify_error(format!("无法恢复登录：{error:#}；正在加载登录二维码…"), cx);
                     this.begin_login(cx);
                 }
             });
@@ -3085,7 +3061,7 @@ impl LyruneView {
         let generation = self.login_generation;
         self.account_state = AccountState::SigningIn;
         self.qr_image = None;
-        self.status = StatusMessage::info("正在向 QQ 音乐申请二维码…");
+        self.login_message = "正在向 QQ 音乐申请二维码…".to_owned();
         cx.notify();
 
         let (sender, receiver) = async_channel::unbounded();
@@ -3113,17 +3089,16 @@ impl LyruneView {
         match event {
             LoginEvent::QrReady(png) => {
                 self.qr_image = Some(Arc::new(Image::from_bytes(ImageFormat::Png, png)));
-                self.status = StatusMessage::info("请使用 QQ 音乐 App 扫描二维码");
+                self.login_message = "请使用 QQ 音乐 App 扫描二维码".to_owned();
             }
-            LoginEvent::WaitingScan => self.status = StatusMessage::info("等待扫码…"),
+            LoginEvent::WaitingScan => self.login_message = "等待扫码…".to_owned(),
             LoginEvent::WaitingConfirm => {
-                self.status = StatusMessage::info("已扫码，请在手机上确认登录");
+                self.login_message = "已扫码，请在手机上确认登录".to_owned();
             }
             LoginEvent::Succeeded(credential) => {
                 self.account_state = AccountState::SignedIn;
                 self.qr_image = None;
                 self.main_content = MainContent::Home;
-                self.status = StatusMessage::info("登录成功，正在加载音乐库…");
                 self.install_credential_session(CredentialSession::new(credential), cx);
                 self.load_home(cx);
                 self.load_library(false, cx);
@@ -3136,8 +3111,8 @@ impl LyruneView {
             LoginEvent::Failed(error) => {
                 self.account_state = AccountState::SignedOut;
                 self.qr_image = None;
-                self.status =
-                    StatusMessage::error(format!("扫码登录失败：{error}；点击二维码区域重试"));
+                self.login_message = "扫码登录失败，点击二维码区域重试".to_owned();
+                self.notify_error(format!("扫码登录失败：{error}"), cx);
             }
         }
         cx.notify();
@@ -3158,9 +3133,10 @@ impl LyruneView {
                 return;
             };
             let _ = this.update(cx, |this, cx| {
-                this.status = StatusMessage::error(format!(
-                    "登录成功，但凭据未能保存到系统钥匙串：{error:#}"
-                ));
+                this.notify_error(
+                    format!("登录成功，但凭据未能保存到系统钥匙串：{error:#}"),
+                    cx,
+                );
                 cx.notify();
             });
         })
@@ -3242,8 +3218,7 @@ impl LyruneView {
                 {
                     return;
                 }
-                this.status =
-                    StatusMessage::error(format!("暂时无法验证 QQ 音乐登录凭据：{error:#}"));
+                this.notify_error(format!("暂时无法验证 QQ 音乐登录凭据：{error:#}"), cx);
                 cx.notify();
             });
         })
@@ -3830,12 +3805,12 @@ impl LyruneView {
 
     fn start_home_recommendation(&mut self, kind: RecommendationKind, cx: &mut Context<Self>) {
         let Some(credential) = self.credential.clone() else {
-            self.status = StatusMessage::error("请先登录 QQ 音乐");
+            self.notify_error("请先登录 QQ 音乐", cx);
             cx.notify();
             return;
         };
         let Some(client) = self.protocol_client.clone() else {
-            self.status = StatusMessage::error("QQ 音乐客户端不可用");
+            self.notify_error("QQ 音乐客户端不可用", cx);
             cx.notify();
             return;
         };
@@ -3892,11 +3867,10 @@ impl LyruneView {
                         this.start_playback(0, Duration::ZERO, None, true, cx);
                     }
                     Ok(_) => {
-                        this.status = StatusMessage::error("QQ 音乐没有返回可播放的推荐歌曲");
+                        this.notify_error("QQ 音乐没有返回可播放的推荐歌曲", cx);
                     }
                     Err(error) => {
-                        this.status =
-                            StatusMessage::error(format!("加载个性化推荐失败：{error:#}"));
+                        this.notify_error(format!("加载个性化推荐失败：{error:#}"), cx);
                     }
                 }
                 cx.notify();
@@ -3985,15 +3959,12 @@ impl LyruneView {
                             this.queue_waiting_for_recommendation = false;
                             if let Some(index) = first_added {
                                 this.start_playback(index, Duration::ZERO, None, true, cx);
-                            } else {
-                                this.status = StatusMessage::info("当前推荐暂时没有更多歌曲");
                             }
                         }
                     }
                     Err(error) => {
                         this.queue_waiting_for_recommendation = false;
-                        this.status =
-                            StatusMessage::error(format!("继续加载推荐歌曲失败：{error:#}"));
+                        this.notify_error(format!("继续加载推荐歌曲失败：{error:#}"), cx);
                     }
                 }
                 #[cfg(target_os = "linux")]
@@ -4024,14 +3995,13 @@ impl LyruneView {
             return;
         }
         let Some(client) = self.protocol_client.clone() else {
-            self.status = StatusMessage::error("QQ 音乐客户端不可用");
+            self.notify_error("QQ 音乐客户端不可用", cx);
             cx.notify();
             return;
         };
         self.library_generation = self.library_generation.wrapping_add(1);
         let generation = self.library_generation;
         self.library_loading = true;
-        self.status = StatusMessage::info("正在加载用户资料和歌单…");
         cx.notify();
         let (sender, receiver) = async_channel::bounded(1);
         drop(RUNTIME.spawn(async move {
@@ -4069,8 +4039,7 @@ impl LyruneView {
                         this.apply_library(account_id, profile, playlists, force_refresh, cx);
                     }
                     Err(error) => {
-                        this.status =
-                            StatusMessage::error(format!("加载 QQ 音乐资料失败：{error:#}"));
+                        this.notify_error(format!("加载 QQ 音乐资料失败：{error:#}"), cx);
                         cx.notify();
                     }
                 }
@@ -4113,7 +4082,6 @@ impl LyruneView {
         if count > 0 && self.main_content == MainContent::Playlist {
             self.select_playlist_with_refresh(viewed_index.unwrap_or(0), force_refresh, false, cx);
         } else if count == 0 {
-            self.status = StatusMessage::info("QQ 音乐账号中没有可显示的歌单");
             cx.notify();
         }
         if let Some(restore) = playback_restore {
@@ -4506,6 +4474,7 @@ impl LyruneView {
         });
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn open_playlist(
         &mut self,
         playlist: UserPlaylist,
@@ -4565,13 +4534,6 @@ impl LyruneView {
             cx.notify();
         });
         self.restore_pending_playlist_scroll(cx);
-        self.status = StatusMessage::info(if !loaded {
-            format!("正在加载歌单“{}”…", playlist.title)
-        } else if tracks.is_empty() {
-            format!("歌单“{}”中暂时没有歌曲", playlist.title)
-        } else {
-            format!("已打开歌单“{}”", playlist.title)
-        });
         self.sync_table_playback_state(cx);
         cx.notify();
         self.prune_page_resources();
@@ -4588,7 +4550,7 @@ impl LyruneView {
             return;
         };
         let Some(client) = self.protocol_client.clone() else {
-            self.status = StatusMessage::error("QQ 音乐客户端不可用");
+            self.notify_error("QQ 音乐客户端不可用", cx);
             cx.notify();
             return;
         };
@@ -4664,16 +4626,9 @@ impl LyruneView {
                             .set_tracks(tracks.clone(), has_more, false);
                         cx.notify();
                     });
-                    this.status = error.map_or_else(
-                        || {
-                            StatusMessage::info(if tracks.is_empty() {
-                                format!("歌单“{}”中暂时没有歌曲", playlist.title)
-                            } else {
-                                format!("已打开歌单“{}”", playlist.title)
-                            })
-                        },
-                        StatusMessage::error,
-                    );
+                    if let Some(error) = error {
+                        this.notify_error(error, cx);
+                    }
                     this.restore_pending_playlist_scroll(cx);
                     if this.pending_playlist_scroll_position.is_some() {
                         this.load_playlist_page(cx);
@@ -5027,7 +4982,7 @@ impl LyruneView {
         cx: &mut Context<Self>,
     ) {
         let Some(credential) = self.credential.clone() else {
-            self.status = StatusMessage::error("请先登录 QQ 音乐");
+            self.notify_error("请先登录 QQ 音乐", cx);
             cx.notify();
             return;
         };
@@ -5040,17 +4995,17 @@ impl LyruneView {
             return;
         };
         let Some(audio_cache) = self.audio_cache.clone() else {
-            self.status = StatusMessage::error("音频缓存不可用，无法创建播放流");
+            self.notify_error("音频缓存不可用，无法创建播放流", cx);
             cx.notify();
             return;
         };
         let Some(audio) = &self.audio else {
-            self.status = StatusMessage::error("没有可用的音频输出设备");
+            self.notify_error("没有可用的音频输出设备", cx);
             cx.notify();
             return;
         };
         let Some(client) = self.protocol_client.clone() else {
-            self.status = StatusMessage::error("QQ 音乐客户端不可用");
+            self.notify_error("QQ 音乐客户端不可用", cx);
             cx.notify();
             return;
         };
@@ -5104,11 +5059,6 @@ impl LyruneView {
             *slider = progress_slider_state(progress);
             cx.notify();
         });
-        self.status = StatusMessage::info(if self.resolving_qualities {
-            format!("正在检测“{}”的音质…", track.title)
-        } else {
-            format!("正在缓冲“{}”…", track.title)
-        });
         self.queue_waiting_for_recommendation = false;
         self.persist_current_playback();
         self.sync_table_playback_state(cx);
@@ -5119,7 +5069,6 @@ impl LyruneView {
         cx.notify();
         self.maybe_load_queue_recommendations(false, cx);
 
-        let title = track.title.clone();
         let (sender, receiver) = async_channel::bounded(1);
         drop(RUNTIME.spawn(async move {
             let result = async {
@@ -5219,14 +5168,7 @@ impl LyruneView {
                         }
                         PlaybackLoadEvent::Options(available_qualities) => {
                             this.resolving_qualities = false;
-                            let has_available_quality = !available_qualities.is_empty();
                             this.available_qualities = available_qualities;
-                            if has_available_quality {
-                                this.status = StatusMessage::info(format!("正在缓冲“{title}”…"));
-                            } else {
-                                this.status =
-                                    StatusMessage::info(format!("正在获取“{title}”的可播放音质…"));
-                            }
                         }
                         PlaybackLoadEvent::Finished(result) => {
                             this.loading_track = None;
@@ -5250,22 +5192,14 @@ impl LyruneView {
                                             }
                                             this.playback_started = true;
                                             this.wake_playback_ticks();
-                                            this.status = StatusMessage::info(if autoplay {
-                                                format!("正在播放“{title}”")
-                                            } else {
-                                                format!("已暂停“{title}”")
-                                            });
                                         }
                                         Err(error) => {
-                                            this.status = StatusMessage::error(format!(
-                                                "播放失败：{error:#}"
-                                            ));
+                                            this.notify_error(format!("播放失败：{error:#}"), cx);
                                         }
                                     }
                                 }
                                 Err(error) => {
-                                    this.status =
-                                        StatusMessage::error(format!("获取歌曲失败：{error:#}"));
+                                    this.notify_error(format!("获取歌曲失败：{error:#}"), cx);
                                 }
                             }
                         }
@@ -5304,13 +5238,8 @@ impl LyruneView {
             self.start_playback(index, Duration::ZERO, None, true, cx);
             return;
         }
-        let playing = audio.toggle();
+        audio.toggle();
         self.wake_playback_ticks();
-        self.status = StatusMessage::info(if playing {
-            "继续播放".to_owned()
-        } else {
-            "已暂停".to_owned()
-        });
         self.persist_current_playback();
         self.sync_table_playback_state(cx);
         #[cfg(target_os = "linux")]
@@ -5369,7 +5298,6 @@ impl LyruneView {
             *slider = progress_slider_state(0.);
             cx.notify();
         });
-        self.status = StatusMessage::info("已停止播放");
         self.persist_current_playback();
         self.sync_table_playback_state(cx);
         self.sync_mpris(false);
@@ -5492,7 +5420,6 @@ impl LyruneView {
             self.playback_started = false;
             self.wake_playback_ticks();
             self.queue_waiting_for_recommendation = true;
-            self.status = StatusMessage::info("正在获取下一首推荐…");
             self.maybe_load_queue_recommendations(true, cx);
             self.persist_current_playback();
             #[cfg(target_os = "linux")]
@@ -5504,7 +5431,6 @@ impl LyruneView {
             self.playback_started = false;
             self.wake_playback_ticks();
             self.position = self.current_duration().unwrap_or_default();
-            self.status = StatusMessage::info("当前播放队列已结束");
             self.persist_current_playback();
             #[cfg(target_os = "linux")]
             self.sync_mpris(false);
@@ -6173,9 +6099,7 @@ impl LyruneView {
                             .current_track_data()
                             .is_some_and(|track| track.mid == mid)
                         {
-                            this.status = StatusMessage::error(format!(
-                                "读取当前歌曲的喜欢状态失败：{error:#}"
-                            ));
+                            this.notify_error(format!("读取当前歌曲的喜欢状态失败：{error:#}"), cx);
                         }
                     }
                 }
@@ -6216,15 +6140,15 @@ impl LyruneView {
             return;
         };
         let Some(client) = self.protocol_client.clone() else {
-            self.status = StatusMessage::error("QQ 音乐客户端不可用");
+            self.notify_error("QQ 音乐客户端不可用", cx);
             cx.notify();
             return;
         };
         if track.song_id.is_none() {
-            self.status = StatusMessage::error(format!(
-                "歌曲“{}”缺少数字 ID，暂时无法修改喜欢状态",
-                track.title
-            ));
+            self.notify_error(
+                format!("歌曲“{}”缺少数字 ID，暂时无法修改喜欢状态", track.title),
+                cx,
+            );
             cx.notify();
             return;
         }
@@ -6253,11 +6177,6 @@ impl LyruneView {
                 match result {
                     Ok(()) => {
                         this.apply_track_liked(account_id, track.clone(), liked, cx);
-                        this.status = StatusMessage::info(if liked {
-                            format!("已喜欢“{}”", track.title)
-                        } else {
-                            format!("已取消喜欢“{}”", track.title)
-                        });
                     }
                     Err(error) => {
                         if this.liked_tracks.get(&mid) == Some(&liked) {
@@ -6267,14 +6186,17 @@ impl LyruneView {
                                 this.liked_tracks.remove(&mid);
                             }
                         }
-                        this.status = StatusMessage::error(format!(
-                            "{}失败：{error:#}",
-                            if liked {
-                                "喜欢歌曲"
-                            } else {
-                                "取消喜欢"
-                            }
-                        ));
+                        this.notify_error(
+                            format!(
+                                "{}失败：{error:#}",
+                                if liked {
+                                    "喜欢歌曲"
+                                } else {
+                                    "取消喜欢"
+                                }
+                            ),
+                            cx,
+                        );
                     }
                 }
                 cx.notify();
@@ -6354,23 +6276,16 @@ impl LyruneView {
                 let _ = client.logout(&credential).await;
             }));
         }
-        self.clear_account_session(StatusMessage::info("已退出登录"), true, cx);
+        self.clear_account_session(true, cx);
     }
 
     fn handle_credential_rejected(&mut self, cx: &mut Context<Self>) {
-        self.clear_account_session(
-            StatusMessage::error("QQ 音乐登录凭据已失效，请重新登录"),
-            false,
-            cx,
-        );
+        self.clear_account_session(false, cx);
+        self.login_message = "QQ 音乐登录凭据已失效，请重新登录".to_owned();
+        self.notify_error(self.login_message.clone(), cx);
     }
 
-    fn clear_account_session(
-        &mut self,
-        status: StatusMessage,
-        restart_login: bool,
-        cx: &mut Context<Self>,
-    ) {
+    fn clear_account_session(&mut self, restart_login: bool, cx: &mut Context<Self>) {
         self.login_generation = self.login_generation.wrapping_add(1);
         self.library_generation = self.library_generation.wrapping_add(1);
         self.home_generation = self.home_generation.wrapping_add(1);
@@ -6432,7 +6347,7 @@ impl LyruneView {
             table.refresh(cx);
             cx.notify();
         });
-        self.status = status;
+        self.login_message = "使用 QQ 音乐 App 扫码登录".to_owned();
         if restart_login {
             self.begin_login(cx);
         } else {
@@ -6509,7 +6424,7 @@ impl LyruneView {
                             .text_sm()
                             .text_center()
                             .text_color(theme.muted_foreground)
-                            .child(self.status.text.clone()),
+                            .child(self.login_message.clone()),
                     ),
             )
             .into_any_element()
@@ -7104,33 +7019,6 @@ impl LyruneView {
                     .pb_3()
                     .child(List::new(&self.playlist_list).size_full()),
             )
-            .when(self.status.is_error, |sidebar| {
-                sidebar.child(
-                    div()
-                        .mx_3()
-                        .mb_3()
-                        .px_3()
-                        .py_2()
-                        .rounded(px(9.))
-                        .bg(theme.background.opacity(0.55))
-                        .text_xs()
-                        .text_color(theme.muted_foreground)
-                        .child(
-                            h_flex()
-                                .items_start()
-                                .gap_2()
-                                .child(
-                                    div()
-                                        .mt(px(5.))
-                                        .size(px(6.))
-                                        .flex_shrink_0()
-                                        .rounded(px(999.))
-                                        .bg(theme.danger),
-                                )
-                                .child(div().line_clamp(2).child(self.status.text.clone())),
-                        ),
-                )
-            })
             .into_any_element()
     }
 
@@ -8194,6 +8082,7 @@ impl LyruneView {
         v_flex().w_full().gap_1().children(rows).into_any_element()
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn render_search_cards(
         &mut self,
         category: SearchCategory,
@@ -10283,8 +10172,22 @@ impl Drop for LyruneView {
 
 impl Render for LyruneView {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let notification_list = Root::read(window, cx).notification.clone();
+        let notification_layer = div()
+            .absolute()
+            .left_0()
+            .right_0()
+            .bottom(px(PLAYER_BAR_HEIGHT + 16.))
+            .flex()
+            .justify_center()
+            .child(div().relative().left(px(-42.)).child(notification_list));
         if self.account_state == AccountState::SignedIn {
-            self.render_main(window, cx)
+            div()
+                .relative()
+                .size_full()
+                .child(self.render_main(window, cx))
+                .child(notification_layer)
+                .into_any_element()
         } else {
             let client_decorations =
                 matches!(window.window_decorations(), Decorations::Client { .. });
@@ -10292,6 +10195,7 @@ impl Render for LyruneView {
                 .relative()
                 .size_full()
                 .child(self.render_login(cx))
+                .child(notification_layer)
                 .when(client_decorations, |this| {
                     this.child(deferred(self.render_window_controls(window, cx)).with_priority(20))
                 })
@@ -10891,8 +10795,10 @@ mod tests {
 
     #[test]
     fn search_history_keeps_the_active_category_without_splitting_one_query() {
-        let mut visible_counts = SearchVisibleCounts::default();
-        visible_counts.albums = 60;
+        let visible_counts = SearchVisibleCounts {
+            albums: 60,
+            ..Default::default()
+        };
         let songs = NavigationPage::Search {
             query: "周杰伦".to_owned(),
             category: SearchCategory::Songs,

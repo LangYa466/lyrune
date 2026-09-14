@@ -1,6 +1,6 @@
 use std::rc::Rc;
 
-use gpui::{App, Font, FontFallbacks, Window, WindowAppearance, font};
+use gpui::{Anchor, App, Font, FontFallbacks, Window, WindowAppearance, font};
 use gpui_component::{Theme, ThemeConfig, ThemeConfigColors, ThemeMode};
 use serde::{Deserialize, Serialize};
 
@@ -608,6 +608,9 @@ pub(crate) fn apply(
     });
     Theme::change(mode, window, cx);
     Theme::global_mut(cx).list.active_highlight = false;
+    let notification = &mut Theme::global_mut(cx).notification;
+    notification.placement = Anchor::BottomCenter;
+    notification.max_items = 1;
 }
 
 fn theme_config(

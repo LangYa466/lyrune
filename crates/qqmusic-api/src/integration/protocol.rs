@@ -235,10 +235,10 @@ impl ProtocolClient {
             Err(error) => Some(error),
         };
 
-        if credential.encrypted_uin.trim().is_empty() {
-            if let Ok(encrypted_uin) = self.fetch_encrypted_uin(&credential).await {
-                credential.encrypted_uin = encrypted_uin;
-            }
+        if credential.encrypted_uin.trim().is_empty()
+            && let Ok(encrypted_uin) = self.fetch_encrypted_uin(&credential).await
+        {
+            credential.encrypted_uin = encrypted_uin;
         }
 
         if credential.encrypted_uin.trim().is_empty() {
