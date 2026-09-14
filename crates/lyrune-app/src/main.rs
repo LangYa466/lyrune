@@ -162,9 +162,21 @@ fn main() {
                 &settings.lyric_font_families,
                 cx,
             );
-            design::apply(settings.color_theme, &fonts, None, cx);
+            let initial_mode = settings.color_theme_mode.resolve(cx.window_appearance());
+            design::apply(
+                settings.light_color_theme,
+                settings.dark_color_theme,
+                initial_mode,
+                matches!(settings.color_theme_mode, settings::ColorThemeMode::Auto),
+                &fonts,
+                None,
+                cx,
+            );
             let (tray_commands, tray_events) = async_channel::unbounded();
-            let tray_available = match tray::install(tray_commands, settings.tray_icon_style) {
+            let tray_available = match tray::install(
+                tray_commands,
+                settings.tray_icon_style.resolve(cx.window_appearance()),
+            ) {
                 Ok(tray) => {
                     cx.set_global(TrayState { _tray: tray });
                     true

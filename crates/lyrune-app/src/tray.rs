@@ -18,6 +18,7 @@ fn icon_rgba(style: TrayIconStyle) -> Vec<u8> {
     let svg = match style {
         TrayIconStyle::Light => LIGHT_ICON_SVG,
         TrayIconStyle::Dark => DARK_ICON_SVG,
+        TrayIconStyle::Auto => DARK_ICON_SVG,
         TrayIconStyle::Color => ICON_SVG,
     };
     let tree = resvg::usvg::Tree::from_data(svg, &resvg::usvg::Options::default())

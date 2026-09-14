@@ -9,6 +9,7 @@ use directories::ProjectDirs;
 use serde::{Deserialize, Serialize};
 
 use crate::design::ColorTheme;
+use gpui::WindowAppearance;
 use qqmusic_api::integration::{
     CdnCache, Quality, Track, UserPlaylist, UserPlaylistId, UserProfile,
 };
@@ -66,6 +67,7 @@ pub enum LyricFrameRate {
 pub enum TrayIconStyle {
     Light,
     Dark,
+    Auto,
     #[default]
     Color,
 }
@@ -97,12 +99,13 @@ impl WindowDecoration {
 }
 
 impl TrayIconStyle {
-    pub const ALL: [Self; 3] = [Self::Light, Self::Dark, Self::Color];
+    pub const ALL: [Self; 4] = [Self::Color, Self::Light, Self::Dark, Self::Auto];
 
     pub const fn id(self) -> &'static str {
         match self {
             Self::Light => "tray-icon-light",
             Self::Dark => "tray-icon-dark",
+            Self::Auto => "tray-icon-auto",
             Self::Color => "tray-icon-color",
         }
     }
@@ -111,7 +114,62 @@ impl TrayIconStyle {
         match self {
             Self::Light => "亮色",
             Self::Dark => "暗色",
+            Self::Auto => "系统",
             Self::Color => "彩色",
+        }
+    }
+
+    pub const fn resolve(self, appearance: WindowAppearance) -> Self {
+        match self {
+            Self::Auto => match appearance {
+                WindowAppearance::Dark | WindowAppearance::VibrantDark => Self::Light,
+                WindowAppearance::Light | WindowAppearance::VibrantLight => Self::Dark,
+            },
+            style => style,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum ColorThemeMode {
+    Light,
+    Dark,
+    #[default]
+    Auto,
+}
+
+impl ColorThemeMode {
+    pub const ALL: [Self; 3] = [Self::Light, Self::Dark, Self::Auto];
+
+    pub const fn id(self) -> &'static str {
+        match self {
+            Self::Light => "theme-mode-light",
+            Self::Dark => "theme-mode-dark",
+            Self::Auto => "theme-mode-auto",
+        }
+    }
+
+    pub const fn label(self) -> &'static str {
+        match self {
+            Self::Light => "亮色",
+            Self::Dark => "暗色",
+            Self::Auto => "系统",
+        }
+    }
+
+    pub const fn resolve(self, appearance: WindowAppearance) -> gpui_component::ThemeMode {
+        match self {
+            Self::Light => gpui_component::ThemeMode::Light,
+            Self::Dark => gpui_component::ThemeMode::Dark,
+            Self::Auto => match appearance {
+                WindowAppearance::Dark | WindowAppearance::VibrantDark => {
+                    gpui_component::ThemeMode::Dark
+                }
+                WindowAppearance::Light | WindowAppearance::VibrantLight => {
+                    gpui_component::ThemeMode::Light
+                }
+            },
         }
     }
 }
@@ -173,7 +231,11 @@ impl PersistedPlayback {
 pub struct AppSettings {
     pub volume: f32,
     pub last_nonzero_volume: f32,
-    pub color_theme: ColorTheme,
+    pub color_theme_mode: ColorThemeMode,
+    pub light_color_theme: ColorTheme,
+    pub dark_color_theme: ColorTheme,
+    #[serde(default, rename = "color_theme", skip_serializing)]
+    legacy_color_theme: Option<ColorTheme>,
     pub tray_icon_style: TrayIconStyle,
     pub window_decoration: WindowDecoration,
     pub ui_font_families: Vec<String>,
@@ -197,7 +259,10 @@ impl Default for AppSettings {
         Self {
             volume: 1.,
             last_nonzero_volume: 1.,
-            color_theme: ColorTheme::default(),
+            color_theme_mode: ColorThemeMode::default(),
+            light_color_theme: ColorTheme::EverforestLight,
+            dark_color_theme: ColorTheme::EverforestDark,
+            legacy_color_theme: None,
             tray_icon_style: TrayIconStyle::default(),
             window_decoration: WindowDecoration::default(),
             ui_font_families: default_ui_font_families(),
@@ -219,6 +284,10 @@ impl Default for AppSettings {
 
 impl AppSettings {
     fn normalized(mut self) -> Self {
+        if let Some(theme) = self.legacy_color_theme.take() {
+            self.light_color_theme = theme;
+            self.dark_color_theme = theme;
+        }
         self.volume = normalized_volume(self.volume, 1.);
         self.last_nonzero_volume = normalized_volume(self.last_nonzero_volume, 1.).max(0.01);
         self.ui_font_families =
@@ -245,6 +314,13 @@ impl AppSettings {
             self.current_playback = None;
         }
         self
+    }
+
+    pub fn active_color_theme(&self, appearance: WindowAppearance) -> ColorTheme {
+        match self.color_theme_mode.resolve(appearance) {
+            gpui_component::ThemeMode::Light => self.light_color_theme,
+            gpui_component::ThemeMode::Dark => self.dark_color_theme,
+        }
     }
 }
 
@@ -489,7 +565,9 @@ mod tests {
         let settings: AppSettings = serde_json::from_str("{}").expect("deserialize defaults");
         assert_eq!(settings.volume, 1.);
         assert_eq!(settings.last_nonzero_volume, 1.);
-        assert_eq!(settings.color_theme, ColorTheme::EverforestLight);
+        assert_eq!(settings.color_theme_mode, ColorThemeMode::Auto);
+        assert_eq!(settings.light_color_theme, ColorTheme::EverforestLight);
+        assert_eq!(settings.dark_color_theme, ColorTheme::EverforestDark);
         assert_eq!(settings.tray_icon_style, TrayIconStyle::Color);
         assert_eq!(settings.window_decoration, WindowDecoration::Ssd);
         assert_eq!(settings.ui_font_families, [".SystemUIFont"]);
@@ -514,6 +592,56 @@ mod tests {
     }
 
     #[test]
+    fn theme_mode_resolves_against_window_appearance() {
+        assert_eq!(
+            ColorThemeMode::Auto.resolve(WindowAppearance::Light),
+            gpui_component::ThemeMode::Light
+        );
+        assert_eq!(
+            ColorThemeMode::Auto.resolve(WindowAppearance::Dark),
+            gpui_component::ThemeMode::Dark
+        );
+        assert_eq!(
+            ColorThemeMode::Light.resolve(WindowAppearance::Dark),
+            gpui_component::ThemeMode::Light
+        );
+    }
+
+    #[test]
+    fn legacy_color_theme_is_migrated_to_both_theme_modes() {
+        let settings = serde_json::from_str::<AppSettings>(r#"{"color_theme":"ayu-dark"}"#)
+            .expect("deserialize legacy theme")
+            .normalized();
+        assert_eq!(settings.color_theme_mode, ColorThemeMode::Auto);
+        assert_eq!(settings.dark_color_theme, ColorTheme::AyuDark);
+        assert_eq!(settings.light_color_theme, ColorTheme::AyuDark);
+    }
+
+    #[test]
+    fn tray_auto_uses_the_inverse_of_the_active_theme() {
+        assert_eq!(
+            TrayIconStyle::Auto.resolve(WindowAppearance::Light),
+            TrayIconStyle::Dark
+        );
+        assert_eq!(
+            TrayIconStyle::Auto.resolve(WindowAppearance::Dark),
+            TrayIconStyle::Light
+        );
+    }
+
+    #[test]
+    fn theme_mode_does_not_restrict_theme_choices() {
+        let mut settings = AppSettings::default();
+        settings.color_theme_mode = ColorThemeMode::Light;
+        settings.light_color_theme = ColorTheme::AyuDark;
+        settings.dark_color_theme = ColorTheme::RosePineDawn;
+        assert_eq!(
+            settings.active_color_theme(WindowAppearance::Dark),
+            ColorTheme::AyuDark
+        );
+    }
+
+    #[test]
     fn font_family_input_is_trimmed_and_deduplicated_in_order() {
         assert_eq!(
             parse_font_families(" Inter, Noto Sans CJK SC，inter, , Noto Color Emoji "),
@@ -526,7 +654,10 @@ mod tests {
         let settings = AppSettings {
             volume: 2.,
             last_nonzero_volume: -1.,
-            color_theme: ColorTheme::CatppuccinMocha,
+            color_theme_mode: ColorThemeMode::Dark,
+            light_color_theme: ColorTheme::RosePineDawn,
+            dark_color_theme: ColorTheme::CatppuccinMocha,
+            legacy_color_theme: None,
             tray_icon_style: TrayIconStyle::Light,
             window_decoration: WindowDecoration::Csd,
             ui_font_families: default_ui_font_families(),
@@ -565,7 +696,10 @@ mod tests {
         let expected = AppSettings {
             volume: 0.37,
             last_nonzero_volume: 0.64,
-            color_theme: ColorTheme::EverforestDark,
+            color_theme_mode: ColorThemeMode::Auto,
+            light_color_theme: ColorTheme::KanagawaWave,
+            dark_color_theme: ColorTheme::EverforestDark,
+            legacy_color_theme: None,
             tray_icon_style: TrayIconStyle::Dark,
             window_decoration: WindowDecoration::Csd,
             ui_font_families: vec!["Inter".to_owned(), "Noto Sans CJK SC".to_owned()],
@@ -607,7 +741,9 @@ mod tests {
 
         assert_eq!(restored.volume, expected.volume);
         assert_eq!(restored.last_nonzero_volume, expected.last_nonzero_volume);
-        assert_eq!(restored.color_theme, expected.color_theme);
+        assert_eq!(restored.color_theme_mode, expected.color_theme_mode);
+        assert_eq!(restored.light_color_theme, expected.light_color_theme);
+        assert_eq!(restored.dark_color_theme, expected.dark_color_theme);
         assert_eq!(restored.tray_icon_style, expected.tray_icon_style);
         assert_eq!(restored.window_decoration, expected.window_decoration);
         assert_eq!(restored.ui_font_families, expected.ui_font_families);
