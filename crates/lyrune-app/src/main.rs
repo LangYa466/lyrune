@@ -4,6 +4,8 @@ mod credentials;
 mod design;
 mod http;
 mod icons;
+#[cfg(target_os = "linux")]
+mod inhibit;
 mod library;
 mod lyrics_cache;
 #[cfg(target_os = "linux")]
@@ -270,6 +272,14 @@ fn main() {
                     .detach();
                 }
                 Err(error) => eprintln!("MPRIS 服务不可用：{error:#}"),
+            }
+
+            #[cfg(target_os = "linux")]
+            {
+                let inhibit_handle = inhibit::install();
+                main_window.borrow().view.update(cx, |view, _| {
+                    view.attach_inhibit(inhibit_handle);
+                });
             }
 
             let main_window_for_tray = main_window;

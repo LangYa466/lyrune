@@ -37,6 +37,7 @@ gpui-platform = { package = "gpui_platform", git = "https://github.com/zed-indus
     "wayland",
     "x11",
 ] }
+ashpd = { version = "0.13.13", default-features = false, features = ["inhibit"] }
 hex = "0.4"
 image = { version = "0.25", default-features = false, features = ["jpeg", "png"] }
 keyring = "4.1.6"
@@ -77,6 +78,7 @@ tray-icon = { version = "0.24.2", default-features = false }
 uuid = { version = "1.18", features = ["v4"] }
 wana_kana = { version = "5.0", default-features = false }
 xxhash-rust = { version = "0.8", features = ["xxh3"] }
+zbus_systemd = { version = "0.26100.0", default-features = false, features = ["login1", "zbus-async-tokio"] }
 
 [patch."https://github.com/zed-industries/zed"]
 gpui = { git = "https://github.com/amtoaer/zed", rev = "ce62fe124dc4d4cef2b33c9114f982090376b866", version = "=0.2.2" }

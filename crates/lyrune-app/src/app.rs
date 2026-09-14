@@ -41,6 +41,8 @@ use crate::http::{
     BlurredCover, CachedImageCache, blurred_cover, blurred_image_source, cached_image_source,
 };
 use crate::icons::{MediaIcon, lyrune_icon, media_icon, media_icon_hsla};
+#[cfg(target_os = "linux")]
+use crate::inhibit::InhibitHandle;
 use crate::library::{
     PlaylistListDelegate, TrackTableDelegate, TrackTableEvent, format_duration, playlist_cover,
 };
@@ -2343,6 +2345,8 @@ pub struct LyruneView {
     #[cfg(target_os = "linux")]
     mpris: Option<MprisHandle>,
     #[cfg(target_os = "linux")]
+    inhibit: Option<InhibitHandle>,
+    #[cfg(target_os = "linux")]
     last_mpris_position_sync: Instant,
 }
 
@@ -2686,6 +2690,8 @@ impl LyruneView {
             #[cfg(target_os = "linux")]
             mpris: None,
             #[cfg(target_os = "linux")]
+            inhibit: None,
+            #[cfg(target_os = "linux")]
             last_mpris_position_sync: Instant::now(),
         };
         view.attach_window(window, cx);
@@ -2967,6 +2973,12 @@ impl LyruneView {
     pub(crate) fn attach_mpris(&mut self, mpris: MprisHandle) {
         self.mpris = Some(mpris);
         self.sync_mpris(false);
+    }
+
+    #[cfg(target_os = "linux")]
+    pub(crate) fn attach_inhibit(&mut self, inhibit: InhibitHandle) {
+        self.inhibit = Some(inhibit);
+        self.sync_inhibit();
     }
 
     #[cfg(target_os = "linux")]
@@ -5102,6 +5114,8 @@ impl LyruneView {
         self.sync_table_playback_state(cx);
         #[cfg(target_os = "linux")]
         self.sync_mpris(!same_track && !resume_at.is_zero());
+        #[cfg(target_os = "linux")]
+        self.sync_inhibit();
         cx.notify();
         self.maybe_load_queue_recommendations(false, cx);
 
@@ -5260,6 +5274,7 @@ impl LyruneView {
                     #[cfg(target_os = "linux")]
                     if finished {
                         this.sync_mpris(seeked);
+                        this.sync_inhibit();
                     }
                     cx.notify();
                 });
@@ -5300,6 +5315,8 @@ impl LyruneView {
         self.sync_table_playback_state(cx);
         #[cfg(target_os = "linux")]
         self.sync_mpris(false);
+        #[cfg(target_os = "linux")]
+        self.sync_inhibit();
         cx.notify();
     }
 
@@ -5356,6 +5373,7 @@ impl LyruneView {
         self.persist_current_playback();
         self.sync_table_playback_state(cx);
         self.sync_mpris(false);
+        self.sync_inhibit();
         cx.notify();
     }
 
@@ -5370,6 +5388,8 @@ impl LyruneView {
         self.start_playback(index, target, Some(self.active_quality), autoplay, cx);
         #[cfg(target_os = "linux")]
         self.sync_mpris(true);
+        #[cfg(target_os = "linux")]
+        self.sync_inhibit();
     }
 
     #[cfg(target_os = "linux")]
@@ -5477,6 +5497,8 @@ impl LyruneView {
             self.persist_current_playback();
             #[cfg(target_os = "linux")]
             self.sync_mpris(false);
+            #[cfg(target_os = "linux")]
+            self.sync_inhibit();
             cx.notify();
         } else {
             self.playback_started = false;
@@ -5486,6 +5508,8 @@ impl LyruneView {
             self.persist_current_playback();
             #[cfg(target_os = "linux")]
             self.sync_mpris(false);
+            #[cfg(target_os = "linux")]
+            self.sync_inhibit();
             cx.notify();
         }
     }
@@ -6005,14 +6029,20 @@ impl LyruneView {
 
     #[cfg(target_os = "linux")]
     fn sync_mpris(&self, seeked: bool) {
-        let Some(mpris) = &self.mpris else {
-            return;
-        };
-        let snapshot = self.mpris_snapshot();
-        if seeked {
-            mpris.seeked(snapshot);
-        } else {
-            mpris.update(snapshot);
+        if let Some(mpris) = &self.mpris {
+            let snapshot = self.mpris_snapshot();
+            if seeked {
+                mpris.seeked(snapshot);
+            } else {
+                mpris.update(snapshot);
+            }
+        }
+    }
+
+    #[cfg(target_os = "linux")]
+    fn sync_inhibit(&self) {
+        if let Some(inhibit) = &self.inhibit {
+            inhibit.set_active(self.playback_is_advancing());
         }
     }
 
@@ -6391,6 +6421,8 @@ impl LyruneView {
         self.clear_persisted_playback();
         #[cfg(target_os = "linux")]
         self.sync_mpris(false);
+        #[cfg(target_os = "linux")]
+        self.sync_inhibit();
         self.playlist_list.update(cx, |list, cx| {
             list.delegate_mut().clear();
             cx.notify();
