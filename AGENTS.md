@@ -19,6 +19,12 @@
 - Use the format `<type>: 中文描述`.
 - Use a conventional type such as `feat`, `chore`, `fix`, or `refactor`.
 
+## Branches
+
+- Choose a branch name that matches the change's function.
+- Use prefixes such as `feat/<topic>`, `fix/<topic>`, `refactor/<topic>`, or `chore/<topic>`.
+- Before pushing, verify that the current branch matches the work instead of using a generic feature branch.
+
 ## Proportional engineering
 
 - Make the smallest coherent change that fully solves the request.
