@@ -1,6 +1,6 @@
 use std::rc::Rc;
 
-use gpui::{App, Font, FontFallbacks, Window, font};
+use gpui::{App, Font, FontFallbacks, Window, WindowAppearance, font};
 use gpui_component::{Theme, ThemeConfig, ThemeConfigColors, ThemeMode};
 use serde::{Deserialize, Serialize};
 
@@ -250,7 +250,6 @@ impl ColorTheme {
     fn palette(self) -> Palette {
         match self {
             Self::CatppuccinLatte => Palette {
-                mode: ThemeMode::Light,
                 background: "#eff1f5",
                 surface: "#e6e9ef",
                 surface_alt: "#ccd0da",
@@ -275,7 +274,6 @@ impl ColorTheme {
                 scrollbar_thumb: "#bcc0cc",
             },
             Self::CatppuccinMocha => Palette {
-                mode: ThemeMode::Dark,
                 background: "#1e1e2e",
                 surface: "#181825",
                 surface_alt: "#313244",
@@ -300,7 +298,6 @@ impl ColorTheme {
                 scrollbar_thumb: "#45475a",
             },
             Self::AyuLight => Palette {
-                mode: ThemeMode::Light,
                 background: "#fcfcfc",
                 surface: "#f8f9fa",
                 surface_alt: "#ebeef0",
@@ -325,7 +322,6 @@ impl ColorTheme {
                 scrollbar_thumb: "#c5c5c8",
             },
             Self::AyuDark => Palette {
-                mode: ThemeMode::Dark,
                 background: "#0d1016",
                 surface: "#16191f",
                 surface_alt: "#1f2127",
@@ -350,7 +346,6 @@ impl ColorTheme {
                 scrollbar_thumb: "#bfbdb64c",
             },
             Self::EverforestLight => Palette {
-                mode: ThemeMode::Light,
                 background: "#fdf6e3",
                 surface: "#f4f0d9",
                 surface_alt: "#efebd4",
@@ -375,7 +370,6 @@ impl ColorTheme {
                 scrollbar_thumb: "#bdc3af",
             },
             Self::EverforestDark => Palette {
-                mode: ThemeMode::Dark,
                 background: "#262e34",
                 surface: "#2e383b",
                 surface_alt: "#343f44",
@@ -400,7 +394,6 @@ impl ColorTheme {
                 scrollbar_thumb: "#485156",
             },
             Self::RosePineDawn => Palette {
-                mode: ThemeMode::Light,
                 background: "#faf4ed",
                 surface: "#fffaf3",
                 surface_alt: "#f2e9e1",
@@ -425,7 +418,6 @@ impl ColorTheme {
                 scrollbar_thumb: "#cecacd",
             },
             Self::RosePineMoon => Palette {
-                mode: ThemeMode::Dark,
                 background: "#232136",
                 surface: "#2a273f",
                 surface_alt: "#393552",
@@ -450,7 +442,6 @@ impl ColorTheme {
                 scrollbar_thumb: "#56526e",
             },
             Self::KanagawaLotus => Palette {
-                mode: ThemeMode::Light,
                 background: "#f2ecbc",
                 surface: "#e5ddb0",
                 surface_alt: "#e7dba0",
@@ -475,7 +466,6 @@ impl ColorTheme {
                 scrollbar_thumb: "#a09cac",
             },
             Self::KanagawaWave => Palette {
-                mode: ThemeMode::Dark,
                 background: "#1f1f28",
                 surface: "#181820",
                 surface_alt: "#2a2a37",
@@ -504,7 +494,6 @@ impl ColorTheme {
 }
 
 struct Palette {
-    mode: ThemeMode,
     background: &'static str,
     surface: &'static str,
     surface_alt: &'static str,
@@ -530,25 +519,47 @@ struct Palette {
 }
 
 pub(crate) fn apply(
-    color_theme: ColorTheme,
+    light_theme: ColorTheme,
+    dark_theme: ColorTheme,
+    mode: ThemeMode,
+    follow_system: bool,
     fonts: &AppFonts,
     window: Option<&mut Window>,
     cx: &mut App,
 ) {
-    let palette = color_theme.palette();
-    let mode = palette.mode;
-    let config = Rc::new(theme_config(color_theme.label(), palette, fonts));
-
-    if mode.is_dark() {
-        Theme::global_mut(cx).dark_theme = config;
+    let light_config = Rc::new(theme_config(
+        light_theme.label(),
+        light_theme.palette(),
+        ThemeMode::Light,
+        fonts,
+    ));
+    let dark_config = Rc::new(theme_config(
+        dark_theme.label(),
+        dark_theme.palette(),
+        ThemeMode::Dark,
+        fonts,
+    ));
+    let theme = Theme::global_mut(cx);
+    theme.light_theme = light_config;
+    theme.dark_theme = dark_config;
+    cx.set_window_appearance(if follow_system {
+        None
     } else {
-        Theme::global_mut(cx).light_theme = config;
-    }
+        Some(match mode {
+            ThemeMode::Light => WindowAppearance::Light,
+            ThemeMode::Dark => WindowAppearance::Dark,
+        })
+    });
     Theme::change(mode, window, cx);
     Theme::global_mut(cx).list.active_highlight = false;
 }
 
-fn theme_config(name: &'static str, palette: Palette, fonts: &AppFonts) -> ThemeConfig {
+fn theme_config(
+    name: &'static str,
+    palette: Palette,
+    mode: ThemeMode,
+    fonts: &AppFonts,
+) -> ThemeConfig {
     let mut colors = ThemeConfigColors::default();
     colors.background = Some(palette.background.into());
     colors.foreground = Some(palette.foreground.into());
@@ -628,7 +639,7 @@ fn theme_config(name: &'static str, palette: Palette, fonts: &AppFonts) -> Theme
     ThemeConfig {
         is_default: true,
         name: name.into(),
-        mode: palette.mode,
+        mode,
         font_size: Some(14.),
         font_family: Some(fonts.ui.family.clone()),
         mono_font_family: Some(fonts.monospace.family.clone()),

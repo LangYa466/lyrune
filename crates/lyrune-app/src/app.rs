@@ -21,6 +21,7 @@ use gpui_component::{
     h_flex, h_resizable,
     input::{Input, InputEvent, InputState, MaskPattern, NumberInput},
     list::{List, ListEvent, ListState},
+    menu::{DropdownMenu as _, PopupMenuItem},
     resizable_panel,
     scroll::ScrollableElement as _,
     slider::{Slider, SliderEvent, SliderState},
@@ -50,8 +51,8 @@ use crate::mpris::{
 };
 use crate::player::{AudioPlayer, PreparedPlayback};
 use crate::settings::{
-    AppSettings, CdnCacheStore, DEFAULT_NAVIGATION_HISTORY_LIMIT, LibraryCache, LyricFrameRate,
-    MAX_IMAGE_CACHE_CAPACITY, MAX_NAVIGATION_HISTORY_LIMIT, PersistedLibraryView,
+    AppSettings, CdnCacheStore, ColorThemeMode, DEFAULT_NAVIGATION_HISTORY_LIMIT, LibraryCache,
+    LyricFrameRate, MAX_IMAGE_CACHE_CAPACITY, MAX_NAVIGATION_HISTORY_LIMIT, PersistedLibraryView,
     PersistedPlayback, PersistedQueueContinuation, PersistedWindowSize, SettingsStore,
     TrayIconStyle, WindowDecoration, default_lyric_font_families, default_monospace_font_families,
     default_ui_font_families, parse_font_families,
@@ -2315,6 +2316,7 @@ pub struct LyruneView {
     lyrics_loading: HashSet<String>,
     lyrics_errors: HashMap<String, String>,
     fonts: AppFonts,
+    color_theme: ColorTheme,
     settings: AppSettings,
     library_cache: LibraryCache,
     page_resource_cache: PageResourceCache,
@@ -2332,7 +2334,6 @@ pub struct LyruneView {
     account_menu_open: bool,
     _subscriptions: Vec<Subscription>,
     _window_subscription: Option<Subscription>,
-    #[cfg(target_os = "linux")]
     _appearance_subscription: Option<Subscription>,
     window_tick_wake: Option<async_channel::Sender<()>>,
     background_tick_wake: Option<async_channel::Sender<()>>,
@@ -2574,6 +2575,7 @@ impl LyruneView {
         })
         .detach();
 
+        let color_theme = settings.active_color_theme(cx.window_appearance());
         let mut view = Self {
             account_state: AccountState::Restoring,
             credential: None,
@@ -2654,6 +2656,7 @@ impl LyruneView {
             lyrics_loading: HashSet::new(),
             lyrics_errors: HashMap::new(),
             fonts,
+            color_theme,
             settings,
             library_cache,
             page_resource_cache: PageResourceCache::default(),
@@ -2674,7 +2677,6 @@ impl LyruneView {
             account_menu_open: false,
             _subscriptions: subscriptions,
             _window_subscription: None,
-            #[cfg(target_os = "linux")]
             _appearance_subscription: None,
             window_tick_wake: None,
             background_tick_wake: None,
@@ -2699,12 +2701,10 @@ impl LyruneView {
         self.next_lyric_highlight_frame = None;
         self.next_lyric_scroll_frame = None;
         window.set_inactive_frame_interval(self.inactive_window_frame_interval());
-        #[cfg(target_os = "linux")]
-        {
-            self._appearance_subscription = Some(window.observe_window_appearance(|window, _| {
-                window.refresh();
+        self._appearance_subscription =
+            Some(cx.observe_window_appearance(window, |this, window, cx| {
+                this.apply_theme(window, cx)
             }));
-        }
         self._window_subscription = Some(cx.observe_window_bounds(window, |this, window, _| {
             let size = window.window_bounds().get_bounds().size;
             let width = f32::from(size.width).round() as u32;
@@ -5560,19 +5560,58 @@ impl LyruneView {
         self.persist_settings();
     }
 
+    fn apply_theme(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let appearance = cx.window_appearance();
+        let mode = self.settings.color_theme_mode.resolve(appearance);
+        self.color_theme = match mode {
+            gpui_component::ThemeMode::Light => self.settings.light_color_theme,
+            gpui_component::ThemeMode::Dark => self.settings.dark_color_theme,
+        };
+        design::apply(
+            self.settings.light_color_theme,
+            self.settings.dark_color_theme,
+            mode,
+            matches!(self.settings.color_theme_mode, ColorThemeMode::Auto),
+            &self.fonts,
+            Some(window),
+            cx,
+        );
+        crate::set_tray_icon_style(self.settings.tray_icon_style.resolve(appearance), cx);
+        cx.notify();
+    }
+
     fn set_color_theme(
         &mut self,
         color_theme: ColorTheme,
+        light: bool,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if self.settings.color_theme == color_theme {
+        let selected = if light {
+            &mut self.settings.light_color_theme
+        } else {
+            &mut self.settings.dark_color_theme
+        };
+        if *selected == color_theme {
             return;
         }
-        self.settings.color_theme = color_theme;
-        design::apply(color_theme, &self.fonts, Some(window), cx);
+        *selected = color_theme;
+        self.apply_theme(window, cx);
         self.persist_settings();
-        cx.notify();
+    }
+
+    fn set_color_theme_mode(
+        &mut self,
+        mode: ColorThemeMode,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if self.settings.color_theme_mode == mode {
+            return;
+        }
+        self.settings.color_theme_mode = mode;
+        self.apply_theme(window, cx);
+        self.persist_settings();
     }
 
     fn set_tray_icon_style(&mut self, style: TrayIconStyle, cx: &mut Context<Self>) {
@@ -5580,7 +5619,7 @@ impl LyruneView {
             return;
         }
         self.settings.tray_icon_style = style;
-        crate::set_tray_icon_style(style, cx);
+        crate::set_tray_icon_style(style.resolve(cx.window_appearance()), cx);
         self.persist_settings();
         cx.notify();
     }
@@ -5757,7 +5796,7 @@ impl LyruneView {
             &self.settings.lyric_font_families,
             cx,
         );
-        design::apply(self.settings.color_theme, &self.fonts, Some(window), cx);
+        self.apply_theme(window, cx);
         self.lyric_layout_cache = LyricLayoutCache::default();
         self.persist_settings();
         cx.notify();
@@ -6409,7 +6448,7 @@ impl LyruneView {
                     .border_color(theme.border)
                     .bg(theme.group_box)
                     .shadow_lg()
-                    .child(lyrune_icon(self.settings.color_theme, px(46.)))
+                    .child(lyrune_icon(self.color_theme, px(46.)))
                     .child(div().text_2xl().font_bold().child("登录 Lyrune"))
                     .child(
                         div()
@@ -6589,23 +6628,42 @@ impl LyruneView {
                         ),
                 )
         };
-        let selected_theme = self.settings.color_theme;
-        let theme_rows = ColorTheme::ALL
-            .chunks(2)
-            .map(|row| {
-                h_flex()
-                    .w_full()
-                    .gap_1()
-                    .children(row.iter().copied().map(|color_theme| {
-                        Button::new(format!("settings-theme-{}", color_theme.id()))
-                            .label(color_theme.label())
-                            .ghost()
-                            .flex_1()
-                            .h(px(38.))
-                            .selected(selected_theme == color_theme)
-                            .on_click(cx.listener(move |this, _, window, cx| {
-                                this.set_color_theme(color_theme, window, cx)
-                            }))
+        let theme_picker = |prefix: &'static str, selected: ColorTheme, light: bool| {
+            let view = cx.entity().clone();
+            Button::new(format!("settings-{prefix}-{}", selected.id()))
+                .label(selected.label())
+                .outline()
+                .w_full()
+                .h(px(38.))
+                .dropdown_menu(move |menu, window, _| {
+                    ColorTheme::ALL.into_iter().fold(menu, |menu, color_theme| {
+                        menu.item(
+                            PopupMenuItem::new(color_theme.label())
+                                .checked(selected == color_theme)
+                                .on_click(window.listener_for(
+                                    &view,
+                                    move |this, _, window, cx| {
+                                        this.set_color_theme(color_theme, light, window, cx)
+                                    },
+                                )),
+                        )
+                    })
+                })
+        };
+        let light_theme_picker = theme_picker("light", self.settings.light_color_theme, true);
+        let dark_theme_picker = theme_picker("dark", self.settings.dark_color_theme, false);
+        let selected_theme_mode = self.settings.color_theme_mode;
+        let theme_mode_buttons = ColorThemeMode::ALL
+            .into_iter()
+            .map(|mode| {
+                Button::new(mode.id())
+                    .label(mode.label())
+                    .ghost()
+                    .flex_1()
+                    .h(px(38.))
+                    .selected(selected_theme_mode == mode)
+                    .on_click(cx.listener(move |this, _, window, cx| {
+                        this.set_color_theme_mode(mode, window, cx)
                     }))
             })
             .collect::<Vec<_>>();
@@ -6719,8 +6777,42 @@ impl LyruneView {
                                 .child(
                                     v_flex()
                                         .gap_2()
+                                        .child(div().font_medium().child("主题偏好"))
+                                        .child(
+                                            div()
+                                                .text_xs()
+                                                .text_color(theme.muted_foreground)
+                                                .child("选择固定的亮色、暗色，或跟随系统外观"),
+                                        )
+                                        .child(h_flex().w_full().gap_1().children(theme_mode_buttons))
                                         .child(div().font_medium().child("主题配色"))
-                                        .children(theme_rows),
+                                        .child(
+                                            div()
+                                                .text_xs()
+                                                .text_color(theme.muted_foreground)
+                                                .child("分别设置亮色和暗色模式使用的主题"),
+                                        )
+                                        .child(
+                                            h_flex()
+                                                .w_full()
+                                                .gap_2()
+                                                .child(
+                                                    v_flex()
+                                                        .flex_1()
+                                                        .gap_1()
+                                                        .pl_4()
+                                                        .child(div().child("亮色"))
+                                                        .child(light_theme_picker),
+                                                )
+                                                .child(
+                                                    v_flex()
+                                                        .flex_1()
+                                                        .gap_1()
+                                                        .pl_4()
+                                                        .child(div().child("暗色"))
+                                                        .child(dark_theme_picker),
+                                                ),
+                                        )
                                 )
                                 .child(
                                     v_flex()
@@ -6733,7 +6825,7 @@ impl LyruneView {
                                             div()
                                                 .text_xs()
                                                 .text_color(theme.muted_foreground)
-                                                .child("亮色为白底黑标，暗色为黑底白标"),
+                                                .child("选择系统托盘图标的显示样式"),
                                         )
                                         .child(
                                             h_flex()
@@ -6916,7 +7008,7 @@ impl LyruneView {
             .mb_2()
             .px_5()
             .gap_3()
-            .child(lyrune_icon(self.settings.color_theme, px(42.)))
+            .child(lyrune_icon(self.color_theme, px(42.)))
             .child(
                 v_flex()
                     .gap_0p5()
@@ -7198,7 +7290,7 @@ impl LyruneView {
                                                 .text_color(theme.primary_foreground)
                                                 .child(media_icon(
                                                     MediaIcon::Play,
-                                                    self.settings.color_theme.icon_on_accent(),
+                                                    self.color_theme.icon_on_accent(),
                                                     px(17.),
                                                 ))
                                                 .child("播放全部"),
@@ -7377,7 +7469,7 @@ impl LyruneView {
                                                 .text_color(theme.primary_foreground)
                                                 .child(media_icon(
                                                     MediaIcon::Play,
-                                                    self.settings.color_theme.icon_on_accent(),
+                                                    self.color_theme.icon_on_accent(),
                                                     px(17.),
                                                 ))
                                                 .child("播放全部"),
@@ -9258,8 +9350,8 @@ impl LyruneView {
         } else {
             is_playing
         };
-        let icon_foreground = self.settings.color_theme.icon_foreground();
-        let icon_accent = self.settings.color_theme.icon_accent();
+        let icon_foreground = self.color_theme.icon_foreground();
+        let icon_accent = self.color_theme.icon_accent();
         let cover_size = if narrow { px(44.) } else { px(52.) };
         let cover = match track.as_ref().and_then(|track| track.cover_url.clone()) {
             Some(url) => div()
@@ -9580,7 +9672,7 @@ impl LyruneView {
                                         } else {
                                             MediaIcon::Play
                                         },
-                                        self.settings.color_theme.icon_on_accent(),
+                                        self.color_theme.icon_on_accent(),
                                         px(21.),
                                     ))
                                     .on_click(
