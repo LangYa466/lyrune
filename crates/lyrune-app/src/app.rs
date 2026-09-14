@@ -5194,6 +5194,7 @@ impl LyruneView {
         cx.spawn(async move |this, cx| {
             while let Ok(event) = receiver.recv().await {
                 let finished = matches!(&event, PlaybackLoadEvent::Finished(_));
+                let seeked = matches!(&event, PlaybackLoadEvent::Finished(Ok(_)));
                 let _ = this.update(cx, |this, cx| {
                     if this.play_generation != generation {
                         return;
@@ -5257,7 +5258,9 @@ impl LyruneView {
                     }
                     this.sync_table_playback_state(cx);
                     #[cfg(target_os = "linux")]
-                    this.sync_mpris(true);
+                    if finished {
+                        this.sync_mpris(seeked);
+                    }
                     cx.notify();
                 });
                 if finished {
