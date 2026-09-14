@@ -5194,6 +5194,7 @@ impl LyruneView {
         cx.spawn(async move |this, cx| {
             while let Ok(event) = receiver.recv().await {
                 let finished = matches!(&event, PlaybackLoadEvent::Finished(_));
+                let seeked = matches!(&event, PlaybackLoadEvent::Finished(Ok(_)));
                 let _ = this.update(cx, |this, cx| {
                     if this.play_generation != generation {
                         return;
@@ -5257,7 +5258,9 @@ impl LyruneView {
                     }
                     this.sync_table_playback_state(cx);
                     #[cfg(target_os = "linux")]
-                    this.sync_mpris(false);
+                    if finished {
+                        this.sync_mpris(seeked);
+                    }
                     cx.notify();
                 });
                 if finished {
@@ -5934,7 +5937,9 @@ impl LyruneView {
     fn mpris_snapshot(&self) -> MprisSnapshot {
         let audio_available = self.audio.is_some();
         let loading = self.loading_track.is_some();
-        let playback_status = if loading || !self.playback_started {
+        let playback_status = if loading {
+            MprisPlaybackStatus::Playing
+        } else if !self.playback_started {
             MprisPlaybackStatus::Stopped
         } else if self.audio.as_ref().is_some_and(AudioPlayer::is_playing) {
             MprisPlaybackStatus::Playing
@@ -6054,7 +6059,9 @@ impl LyruneView {
             self.persist_current_playback();
         }
         #[cfg(target_os = "linux")]
-        if self.current_track.is_some() && self.last_mpris_position_sync.elapsed() >= PROGRESS_TICK
+        if self.current_track.is_some()
+            && self.loading_track.is_none()
+            && self.last_mpris_position_sync.elapsed() >= PROGRESS_TICK
         {
             self.sync_mpris_position();
             self.last_mpris_position_sync = Instant::now();
