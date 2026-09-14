@@ -14,8 +14,9 @@ static LYRUNE_ICONS: LazyLock<[Arc<Image>; ColorTheme::ALL.len()]> = LazyLock::n
     })
 });
 
-static MEDIA_ICONS: LazyLock<Mutex<HashMap<(MediaIcon, u32), Arc<Image>>>> =
-    LazyLock::new(|| Mutex::new(HashMap::new()));
+type MediaIconCache = Mutex<HashMap<(MediaIcon, u32), Arc<Image>>>;
+
+static MEDIA_ICONS: LazyLock<MediaIconCache> = LazyLock::new(|| Mutex::new(HashMap::new()));
 
 fn themed_lyrune_svg(theme: ColorTheme) -> Vec<u8> {
     let colors = theme.palette();

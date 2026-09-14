@@ -17,6 +17,7 @@ use gpui_component::{
 use qqmusic_api::integration::{SearchAlbum, SearchArtist, Track, UserPlaylist, UserPlaylistId};
 
 #[derive(Clone)]
+#[allow(clippy::large_enum_variant)]
 pub enum TrackTableEvent {
     Artist(SearchArtist),
     Album(SearchAlbum),

@@ -14,7 +14,7 @@ pub(super) fn encrypt_in_place(data: &mut [u8]) -> bool {
 }
 
 fn transform_in_place(data: &mut [u8], encrypt: bool) -> bool {
-    if data.len() % 8 != 0 {
+    if !data.len().is_multiple_of(8) {
         return false;
     }
 
@@ -59,8 +59,8 @@ impl QrcDes {
     }
 
     fn transform_bytes(&self, data: &mut [u8]) {
-        for block in data.chunks_exact_mut(8) {
-            let input = u64::from_le_bytes(block.try_into().expect("DES block has eight bytes"));
+        for block in data.as_chunks_mut::<8>().0 {
+            let input = u64::from_le_bytes(*block);
             block.copy_from_slice(&self.transform_block(input).to_le_bytes());
         }
     }

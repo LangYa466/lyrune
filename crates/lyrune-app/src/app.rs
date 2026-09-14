@@ -637,6 +637,7 @@ impl LyricLayoutCache {
             .collect();
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn line(
         &mut self,
         index: usize,
@@ -735,6 +736,7 @@ impl PreparedLyricsElement {
         )
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn paint_line(
         line: &PreparedLyricLine,
         origin: Point<Pixels>,
@@ -1775,6 +1777,7 @@ impl SearchVisibleCounts {
     }
 }
 
+#[derive(Default)]
 struct SearchResource {
     results: Option<SharedSearchResults>,
     loading: bool,
@@ -1782,17 +1785,7 @@ struct SearchResource {
     error: Option<String>,
 }
 
-impl Default for SearchResource {
-    fn default() -> Self {
-        Self {
-            results: None,
-            loading: false,
-            loading_more: [false; 4],
-            error: None,
-        }
-    }
-}
-
+#[derive(Default)]
 struct ArtistResource {
     songs: Option<SharedSearchPage<Track>>,
     track_count: u64,
@@ -1803,22 +1796,6 @@ struct ArtistResource {
     albums_loading: bool,
     albums_loading_more: bool,
     album_error: Option<String>,
-}
-
-impl Default for ArtistResource {
-    fn default() -> Self {
-        Self {
-            songs: None,
-            track_count: 0,
-            songs_loading: false,
-            songs_loading_more: false,
-            song_error: None,
-            albums: None,
-            albums_loading: false,
-            albums_loading_more: false,
-            album_error: None,
-        }
-    }
 }
 
 struct PlaylistResource {
@@ -3982,7 +3959,6 @@ impl LyruneView {
                             this.queue_waiting_for_recommendation = false;
                             if let Some(index) = first_added {
                                 this.start_playback(index, Duration::ZERO, None, true, cx);
-                            } else {
                             }
                         }
                     }
@@ -4498,6 +4474,7 @@ impl LyruneView {
         });
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn open_playlist(
         &mut self,
         playlist: UserPlaylist,
@@ -8105,6 +8082,7 @@ impl LyruneView {
         v_flex().w_full().gap_1().children(rows).into_any_element()
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn render_search_cards(
         &mut self,
         category: SearchCategory,
@@ -10817,8 +10795,10 @@ mod tests {
 
     #[test]
     fn search_history_keeps_the_active_category_without_splitting_one_query() {
-        let mut visible_counts = SearchVisibleCounts::default();
-        visible_counts.albums = 60;
+        let visible_counts = SearchVisibleCounts {
+            albums: 60,
+            ..Default::default()
+        };
         let songs = NavigationPage::Search {
             query: "周杰伦".to_owned(),
             category: SearchCategory::Songs,

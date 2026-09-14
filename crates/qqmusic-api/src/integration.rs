@@ -519,6 +519,7 @@ impl PlaybackOption {
     }
 }
 
+#[allow(clippy::large_enum_variant)]
 pub enum LoginEvent {
     QrReady(Vec<u8>),
     WaitingScan,

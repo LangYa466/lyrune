@@ -134,6 +134,7 @@ impl Asset for CachedImageFile {
     }
 }
 
+#[allow(clippy::manual_async_fn)]
 impl Asset for CachedThumbnailFile {
     type Source = ThumbnailSource;
     type Output = Result<Arc<Path>, ImageCacheError>;
@@ -257,6 +258,7 @@ impl ImageCache for CachedImageCache {
     }
 }
 
+#[allow(clippy::manual_async_fn)]
 impl Asset for BlurredCoverImage {
     type Source = String;
     type Output = Result<Arc<BlurredCover>, ImageCacheError>;
@@ -575,6 +577,72 @@ fn image_cache_key(url: &str) -> String {
     cache_key(url.as_bytes())
 }
 
+pub struct QqImageHttpClient {
+    client: reqwest::Client,
+    user_agent: http_client::http::HeaderValue,
+}
+
+impl QqImageHttpClient {
+    pub fn new() -> anyhow::Result<Self> {
+        let user_agent = http_client::http::HeaderValue::from_static("Lyrune/0.1");
+        let mut headers = reqwest::header::HeaderMap::new();
+        headers.insert(
+            reqwest::header::REFERER,
+            reqwest::header::HeaderValue::from_static("https://y.qq.com/"),
+        );
+        let client = reqwest::Client::builder()
+            .user_agent(user_agent.clone())
+            .default_headers(headers)
+            .timeout(Duration::from_secs(30))
+            .build()?;
+        Ok(Self { client, user_agent })
+    }
+}
+
+impl HttpClient for QqImageHttpClient {
+    fn user_agent(&self) -> Option<&http_client::http::HeaderValue> {
+        Some(&self.user_agent)
+    }
+
+    fn proxy(&self) -> Option<&Url> {
+        None
+    }
+
+    fn send(
+        &self,
+        request: Request<AsyncBody>,
+    ) -> BoxFuture<'static, anyhow::Result<Response<AsyncBody>>> {
+        let client = self.client.clone();
+        let request = RUNTIME.spawn(async move {
+            let (parts, mut body) = request.into_parts();
+            let mut body_bytes = Vec::new();
+            body.read_to_end(&mut body_bytes).await?;
+
+            let mut request = client
+                .request(parts.method, parts.uri.to_string())
+                .headers(parts.headers);
+            if !body_bytes.is_empty() {
+                request = request.body(body_bytes);
+            }
+
+            let response = request.send().await?;
+            let status = response.status();
+            let headers = response.headers().clone();
+            let bytes = response.bytes().await?;
+            let mut response = Response::builder().status(status);
+            *response
+                .headers_mut()
+                .expect("response builder accepts headers before body") = headers;
+            anyhow::Ok(response.body(AsyncBody::from(bytes))?)
+        });
+        Box::pin(async move { request.await? })
+    }
+}
+
+pub fn client() -> anyhow::Result<Arc<dyn HttpClient>> {
+    Ok(Arc::new(QqImageHttpClient::new()?))
+}
+
 #[cfg(test)]
 mod tests {
     use std::sync::atomic::{AtomicUsize, Ordering};
@@ -749,70 +817,4 @@ mod tests {
 
         assert_eq!(sampled, [32. / 255.; 3]);
     }
-}
-
-pub struct QqImageHttpClient {
-    client: reqwest::Client,
-    user_agent: http_client::http::HeaderValue,
-}
-
-impl QqImageHttpClient {
-    pub fn new() -> anyhow::Result<Self> {
-        let user_agent = http_client::http::HeaderValue::from_static("Lyrune/0.1");
-        let mut headers = reqwest::header::HeaderMap::new();
-        headers.insert(
-            reqwest::header::REFERER,
-            reqwest::header::HeaderValue::from_static("https://y.qq.com/"),
-        );
-        let client = reqwest::Client::builder()
-            .user_agent(user_agent.clone())
-            .default_headers(headers)
-            .timeout(Duration::from_secs(30))
-            .build()?;
-        Ok(Self { client, user_agent })
-    }
-}
-
-impl HttpClient for QqImageHttpClient {
-    fn user_agent(&self) -> Option<&http_client::http::HeaderValue> {
-        Some(&self.user_agent)
-    }
-
-    fn proxy(&self) -> Option<&Url> {
-        None
-    }
-
-    fn send(
-        &self,
-        request: Request<AsyncBody>,
-    ) -> BoxFuture<'static, anyhow::Result<Response<AsyncBody>>> {
-        let client = self.client.clone();
-        let request = RUNTIME.spawn(async move {
-            let (parts, mut body) = request.into_parts();
-            let mut body_bytes = Vec::new();
-            body.read_to_end(&mut body_bytes).await?;
-
-            let mut request = client
-                .request(parts.method, parts.uri.to_string())
-                .headers(parts.headers);
-            if !body_bytes.is_empty() {
-                request = request.body(body_bytes);
-            }
-
-            let response = request.send().await?;
-            let status = response.status();
-            let headers = response.headers().clone();
-            let bytes = response.bytes().await?;
-            let mut response = Response::builder().status(status);
-            *response
-                .headers_mut()
-                .expect("response builder accepts headers before body") = headers;
-            anyhow::Ok(response.body(AsyncBody::from(bytes))?)
-        });
-        Box::pin(async move { request.await? })
-    }
-}
-
-pub fn client() -> anyhow::Result<Arc<dyn HttpClient>> {
-    Ok(Arc::new(QqImageHttpClient::new()?))
 }

@@ -232,7 +232,7 @@ fn main() {
                 while let Ok(command) = instance_commands.recv().await {
                     match command {
                         single_instance::InstanceCommand::Show => {
-                            let _ = cx.update(|cx| show_main_window(&main_window_for_instance, cx));
+                            cx.update(|cx| show_main_window(&main_window_for_instance, cx));
                         }
                     }
                 }
@@ -287,10 +287,10 @@ fn main() {
                 while let Ok(command) = tray_events.recv().await {
                     match command {
                         TrayCommand::Show => {
-                            let _ = cx.update(|cx| show_main_window(&main_window_for_tray, cx));
+                            cx.update(|cx| show_main_window(&main_window_for_tray, cx));
                         }
                         TrayCommand::Quit => {
-                            let _ = cx.update(|cx| cx.quit());
+                            cx.update(|cx| cx.quit());
                             break;
                         }
                     }

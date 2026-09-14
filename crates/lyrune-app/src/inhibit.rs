@@ -28,6 +28,7 @@ enum Backend {
     Unavailable,
 }
 
+#[allow(clippy::large_enum_variant)]
 enum Inhibition {
     Portal(Request<()>),
     Logind(OwnedFd),
