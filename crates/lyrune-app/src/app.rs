@@ -5109,7 +5109,6 @@ impl LyruneView {
         let (sender, receiver) = async_channel::bounded(1);
         drop(RUNTIME.spawn(async move {
             let result = async {
-                tokio::time::sleep(Duration::from_secs(10)).await;
                 let reused_stream = match reused_urls {
                     Some(urls) => audio_cache
                         .prepare_for_seek_with_fallbacks(urls.clone(), &track, desired_quality)
@@ -5258,7 +5257,7 @@ impl LyruneView {
                     }
                     this.sync_table_playback_state(cx);
                     #[cfg(target_os = "linux")]
-                    this.sync_mpris(false);
+                    this.sync_mpris(true);
                     cx.notify();
                 });
                 if finished {
