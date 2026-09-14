@@ -18,7 +18,7 @@ static MEDIA_ICONS: LazyLock<Mutex<HashMap<(MediaIcon, u32), Arc<Image>>>> =
     LazyLock::new(|| Mutex::new(HashMap::new()));
 
 fn themed_lyrune_svg(theme: ColorTheme) -> Vec<u8> {
-    let colors = theme.logo_palette();
+    let colors = theme.palette();
     format!(
         r#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" role="img" aria-labelledby="title desc">
   <title id="title">Lyrune</title>
@@ -37,10 +37,10 @@ fn themed_lyrune_svg(theme: ColorTheme) -> Vec<u8> {
 </svg>"#,
         background = colors.background,
         foreground = colors.foreground,
-        trail_primary = colors.trail_primary,
-        trail_secondary = colors.trail_secondary,
-        trail_tertiary = colors.trail_tertiary,
-        detail = colors.detail,
+        trail_primary = colors.primary,
+        trail_secondary = colors.ring,
+        trail_tertiary = colors.subtext_foreground,
+        detail = colors.emotion,
     )
     .into_bytes()
 }
