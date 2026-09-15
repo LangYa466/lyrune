@@ -2278,6 +2278,7 @@ pub struct LyruneView {
     progress_hovered: bool,
     progress_hover_fraction: Option<f32>,
     cover_backdrop_expanded: bool,
+    cover_backdrop_visible: bool,
     cover_backdrop_fully_expanded: bool,
     backdrop_current_url: Option<String>,
     backdrop_previous_url: Option<String>,
@@ -2622,6 +2623,7 @@ impl LyruneView {
             progress_hovered: false,
             progress_hover_fraction: None,
             cover_backdrop_expanded: false,
+            cover_backdrop_visible: false,
             cover_backdrop_fully_expanded: false,
             backdrop_current_url: None,
             backdrop_previous_url: None,
@@ -2819,7 +2821,7 @@ impl LyruneView {
     }
 
     fn inactive_window_frame_interval(&self) -> Option<Duration> {
-        if self.cover_backdrop_expanded {
+        if self.cover_backdrop_visible {
             combined_lyric_frame_interval(
                 self.settings.lyric_highlight_frame_rate,
                 self.settings.lyric_scroll_frame_rate,
@@ -2855,7 +2857,7 @@ impl LyruneView {
         self.lyric_animation_frame_pending = true;
         cx.on_next_frame(window, |this, window, cx| {
             this.lyric_animation_frame_pending = false;
-            if !this.cover_backdrop_expanded || !this.playback_is_advancing() {
+            if !this.cover_backdrop_visible || !this.playback_is_advancing() {
                 this.reset_lyric_animation_frames();
                 return;
             }
@@ -2957,7 +2959,10 @@ impl LyruneView {
         if !expanded {
             self.cover_backdrop_fully_expanded = false;
         }
-        self.reset_lyric_animation_frames();
+        if expanded && !self.cover_backdrop_visible {
+            self.cover_backdrop_visible = true;
+            self.reset_lyric_animation_frames();
+        }
         window.set_inactive_frame_interval(self.inactive_window_frame_interval());
         self.wake_playback_ticks();
         cx.notify();
@@ -8831,7 +8836,7 @@ impl LyruneView {
             let active = Some(anchor);
             let now = cx.background_executor().now();
             let motion_enabled =
-                self.cover_backdrop_expanded && self.playback_is_advancing() && !cx.reduce_motion();
+                self.cover_backdrop_visible && self.playback_is_advancing() && !cx.reduce_motion();
             let (scroll_anchor, style_anchor) =
                 self.lyric_motion_anchors(mid, anchor, motion_enabled, now);
             let scroll_offset = px(scroll_anchor * LYRIC_ROW_HEIGHT);
@@ -8959,6 +8964,12 @@ impl LyruneView {
         );
         if self.cover_backdrop_expanded && expansion_progress >= 1. {
             self.cover_backdrop_fully_expanded = true;
+        }
+        let visible = self.cover_backdrop_expanded || expansion_progress > 0.;
+        if self.cover_backdrop_visible != visible {
+            self.cover_backdrop_visible = visible;
+            self.reset_lyric_animation_frames();
+            window.set_inactive_frame_interval(self.inactive_window_frame_interval());
         }
         let height = available_height * expansion_progress;
         let theme = cx.theme().clone();
@@ -9880,7 +9891,7 @@ impl LyruneView {
     }
 
     fn render_main(&mut self, window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
-        if self.cover_backdrop_expanded && self.playback_is_advancing() {
+        if self.cover_backdrop_visible && self.playback_is_advancing() {
             if self.seek_preview.is_none() {
                 self.position = self
                     .audio
