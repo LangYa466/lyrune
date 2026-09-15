@@ -140,7 +140,6 @@ impl ColorTheme {
             Self::CatppuccinLatte => Palette {
                 background: "#eff1f5",
                 surface: "#e6e9ef",
-                surface_alt: "#ccd0da",
                 sidebar: "#e6e9ef",
                 outer: "#dce0e8",
                 foreground: "#4c4f69",
@@ -164,7 +163,6 @@ impl ColorTheme {
             Self::CatppuccinMocha => Palette {
                 background: "#1e1e2e",
                 surface: "#181825",
-                surface_alt: "#313244",
                 sidebar: "#181825",
                 outer: "#11111b",
                 foreground: "#cdd6f4",
@@ -188,7 +186,6 @@ impl ColorTheme {
             Self::AyuLight => Palette {
                 background: "#fcfcfc",
                 surface: "#f8f9fa",
-                surface_alt: "#ebeef0",
                 sidebar: "#f8f9fa",
                 outer: "#ebeef0",
                 foreground: "#5c6166",
@@ -212,7 +209,6 @@ impl ColorTheme {
             Self::AyuDark => Palette {
                 background: "#0d1016",
                 surface: "#16191f",
-                surface_alt: "#1f2127",
                 sidebar: "#16191f",
                 outer: "#090b10",
                 foreground: "#b3b1ad",
@@ -236,7 +232,6 @@ impl ColorTheme {
             Self::EverforestLight => Palette {
                 background: "#fdf6e3",
                 surface: "#f4f0d9",
-                surface_alt: "#efebd4",
                 sidebar: "#f4f0d9",
                 outer: "#efebd4",
                 foreground: "#5c6a72",
@@ -260,7 +255,6 @@ impl ColorTheme {
             Self::EverforestDark => Palette {
                 background: "#262e34",
                 surface: "#2e383b",
-                surface_alt: "#343f44",
                 sidebar: "#1f262b",
                 outer: "#1e2326",
                 foreground: "#d3c6aa",
@@ -284,7 +278,6 @@ impl ColorTheme {
             Self::RosePineDawn => Palette {
                 background: "#faf4ed",
                 surface: "#fffaf3",
-                surface_alt: "#f2e9e1",
                 sidebar: "#fffaf3",
                 outer: "#f2e9e1",
                 foreground: "#575279",
@@ -308,7 +301,6 @@ impl ColorTheme {
             Self::RosePineMoon => Palette {
                 background: "#232136",
                 surface: "#2a273f",
-                surface_alt: "#393552",
                 sidebar: "#2a273f",
                 outer: "#191724",
                 foreground: "#e0def4",
@@ -332,7 +324,6 @@ impl ColorTheme {
             Self::KanagawaLotus => Palette {
                 background: "#f2ecbc",
                 surface: "#e5ddb0",
-                surface_alt: "#e7dba0",
                 sidebar: "#e5ddb0",
                 outer: "#dcd5ac",
                 foreground: "#545464",
@@ -356,7 +347,6 @@ impl ColorTheme {
             Self::KanagawaWave => Palette {
                 background: "#1f1f28",
                 surface: "#181820",
-                surface_alt: "#2a2a37",
                 sidebar: "#181820",
                 outer: "#16161d",
                 foreground: "#dcd7ba",
@@ -380,7 +370,6 @@ impl ColorTheme {
             Self::AyuMirage => Palette {
                 background: "#1f2430",
                 surface: "#232834",
-                surface_alt: "#2b3240",
                 sidebar: "#232834",
                 outer: "#191e29",
                 foreground: "#cbccc6",
@@ -404,7 +393,6 @@ impl ColorTheme {
             Self::OneDark => Palette {
                 background: "#282c34",
                 surface: "#21252b",
-                surface_alt: "#2c323c",
                 sidebar: "#21252b",
                 outer: "#1b1d23",
                 foreground: "#abb2bf",
@@ -428,7 +416,6 @@ impl ColorTheme {
             Self::OneLight => Palette {
                 background: "#fafafa",
                 surface: "#f0f0f1",
-                surface_alt: "#e5e5e6",
                 sidebar: "#f0f0f1",
                 outer: "#e7e7e8",
                 foreground: "#383a42",
@@ -452,7 +439,6 @@ impl ColorTheme {
             Self::GruvboxLight => Palette {
                 background: "#fbf1c7",
                 surface: "#f2e5bc",
-                surface_alt: "#ebdbb2",
                 sidebar: "#f2e5bc",
                 outer: "#d5c4a1",
                 foreground: "#654735",
@@ -476,7 +462,6 @@ impl ColorTheme {
             Self::GruvboxDark => Palette {
                 background: "#282828",
                 surface: "#1d2021",
-                surface_alt: "#3c3836",
                 sidebar: "#1d2021",
                 outer: "#1d2021",
                 foreground: "#ebdbb2",
@@ -500,7 +485,6 @@ impl ColorTheme {
             Self::DraculaLight => Palette {
                 background: "#f8f8f2",
                 surface: "#f0f0e8",
-                surface_alt: "#e6e6dc",
                 sidebar: "#f0f0e8",
                 outer: "#deded5",
                 foreground: "#424450",
@@ -524,7 +508,6 @@ impl ColorTheme {
             Self::DraculaDark => Palette {
                 background: "#282a36",
                 surface: "#21222c",
-                surface_alt: "#44475a",
                 sidebar: "#21222c",
                 outer: "#191a21",
                 foreground: "#f8f8f2",
@@ -552,7 +535,6 @@ impl ColorTheme {
 pub struct Palette {
     pub background: &'static str,
     pub surface: &'static str,
-    pub surface_alt: &'static str,
     pub sidebar: &'static str,
     pub outer: &'static str,
     pub foreground: &'static str,
@@ -664,13 +646,11 @@ fn theme_config(
     colors.popover_foreground = Some(palette.foreground.into());
     colors.sidebar = Some(palette.sidebar.into());
     colors.sidebar_foreground = Some(palette.foreground.into());
-    colors.sidebar_accent = Some(palette.surface_alt.into());
-    colors.sidebar_accent_foreground = Some(palette.accent_foreground.into());
     colors.sidebar_border = Some(palette.border.into());
     colors.sidebar_primary = Some(palette.primary.into());
     colors.sidebar_primary_foreground = Some(palette.primary_foreground.into());
     colors.list = Some(palette.sidebar.into());
-    colors.list_active = Some(palette.surface_alt.into());
+    colors.list_active = Some(palette.active.into());
     colors.list_active_border = Some("#00000000".into());
     colors.list_hover = Some(palette.hover.into());
     colors.list_even = Some(palette.sidebar.into());

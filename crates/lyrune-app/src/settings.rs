@@ -15,7 +15,7 @@ use qqmusic_api::integration::{
 };
 
 pub const DEFAULT_AUDIO_CACHE_LIMIT_GB: u64 = 10;
-pub const DEFAULT_IMAGE_CACHE_CAPACITY: usize = 36;
+pub const DEFAULT_IMAGE_CACHE_CAPACITY: usize = 80;
 pub const DEFAULT_NAVIGATION_HISTORY_LIMIT: usize = 10;
 pub const MAX_IMAGE_CACHE_CAPACITY: usize = 512;
 pub const MAX_NAVIGATION_HISTORY_LIMIT: usize = 100;
@@ -67,8 +67,8 @@ pub enum LyricFrameRate {
 pub enum TrayIconStyle {
     Light,
     Dark,
-    Auto,
     #[default]
+    Auto,
     Color,
 }
 
@@ -260,8 +260,8 @@ impl Default for AppSettings {
             volume: 1.,
             last_nonzero_volume: 1.,
             color_theme_mode: ColorThemeMode::default(),
-            light_color_theme: ColorTheme::EverforestLight,
-            dark_color_theme: ColorTheme::EverforestDark,
+            light_color_theme: ColorTheme::RosePineDawn,
+            dark_color_theme: ColorTheme::RosePineMoon,
             legacy_color_theme: None,
             tray_icon_style: TrayIconStyle::default(),
             window_decoration: WindowDecoration::default(),
@@ -566,9 +566,9 @@ mod tests {
         assert_eq!(settings.volume, 1.);
         assert_eq!(settings.last_nonzero_volume, 1.);
         assert_eq!(settings.color_theme_mode, ColorThemeMode::Auto);
-        assert_eq!(settings.light_color_theme, ColorTheme::EverforestLight);
-        assert_eq!(settings.dark_color_theme, ColorTheme::EverforestDark);
-        assert_eq!(settings.tray_icon_style, TrayIconStyle::Color);
+        assert_eq!(settings.light_color_theme, ColorTheme::RosePineDawn);
+        assert_eq!(settings.dark_color_theme, ColorTheme::RosePineMoon);
+        assert_eq!(settings.tray_icon_style, TrayIconStyle::Auto);
         assert_eq!(settings.window_decoration, WindowDecoration::Ssd);
         assert_eq!(settings.ui_font_families, [".SystemUIFont"]);
         assert_eq!(
@@ -577,7 +577,7 @@ mod tests {
         );
         assert_eq!(settings.lyric_font_families, [".SystemUIFont"]);
         assert_eq!(settings.audio_cache_limit_gb, DEFAULT_AUDIO_CACHE_LIMIT_GB);
-        assert_eq!(settings.image_cache_capacity, DEFAULT_IMAGE_CACHE_CAPACITY);
+        assert_eq!(settings.image_cache_capacity, 80);
         assert_eq!(
             settings.navigation_history_limit,
             DEFAULT_NAVIGATION_HISTORY_LIMIT

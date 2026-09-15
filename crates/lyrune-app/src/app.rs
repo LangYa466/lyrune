@@ -72,6 +72,7 @@ use xxhash_rust::xxh3::xxh3_128;
 
 const PAGE_SIZE: u64 = 100;
 const ARTIST_PAGE_SIZE: u64 = 5;
+const ARTIST_ALBUM_PAGE_SIZE: u64 = 10;
 const SEARCH_PAGE_SIZE: usize = 20;
 const PROGRESS_TICK: Duration = Duration::from_millis(250);
 const PLAYBACK_PERSIST_INTERVAL: Duration = Duration::from_secs(5);
@@ -2583,7 +2584,7 @@ impl LyruneView {
             selected_artist: None,
             artist_resource: None,
             artist_visible_song_count: ARTIST_PAGE_SIZE as usize,
-            artist_visible_album_count: ARTIST_PAGE_SIZE as usize,
+            artist_visible_album_count: ARTIST_ALBUM_PAGE_SIZE as usize,
             playlist_list,
             track_table,
             search_input,
@@ -4144,7 +4145,7 @@ impl LyruneView {
         let target = NavigationPage::Artist {
             artist,
             visible_song_count: ARTIST_PAGE_SIZE as usize,
-            visible_album_count: ARTIST_PAGE_SIZE as usize,
+            visible_album_count: ARTIST_ALBUM_PAGE_SIZE as usize,
             resource: Some(resource),
         };
         let current = self.current_navigation_page(cx);
@@ -4286,7 +4287,7 @@ impl LyruneView {
         if append {
             self.artist_visible_album_count = self
                 .artist_visible_album_count
-                .saturating_add(ARTIST_PAGE_SIZE as usize);
+                .saturating_add(ARTIST_ALBUM_PAGE_SIZE as usize);
         }
         let target_count = self.artist_visible_album_count;
         let offset = {
@@ -4315,7 +4316,7 @@ impl LyruneView {
 
         let task = RUNTIME.spawn(async move {
             client
-                .artist_albums(&credential, &artist, offset, ARTIST_PAGE_SIZE)
+                .artist_albums(&credential, &artist, offset, ARTIST_ALBUM_PAGE_SIZE)
                 .await
         });
 
