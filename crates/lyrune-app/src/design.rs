@@ -312,7 +312,7 @@ impl ColorTheme {
                 primary_foreground: "#232136",
                 primary_hover: "#9ccfd8",
                 primary_active: "#c4a7e7",
-                accent: "#2a283e",
+                accent: "#393552",
                 accent_foreground: "#e0def4",
                 active: "#c4a7e71f",
                 hover: "#39355299",
