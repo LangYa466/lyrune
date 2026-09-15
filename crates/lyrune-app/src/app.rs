@@ -1595,9 +1595,6 @@ fn unix_timestamp_secs() -> u64 {
 
 pub(crate) static RUNTIME: LazyLock<Runtime> = LazyLock::new(|| {
     Builder::new_multi_thread()
-        .worker_threads(2)
-        .max_blocking_threads(4)
-        .thread_keep_alive(Duration::from_secs(2))
         .enable_all()
         .thread_name("lyrune-worker")
         .build()
@@ -2692,6 +2689,7 @@ impl LyruneView {
             .id::<GlobalErrorNotification>()
             .bg(cx.theme().danger)
             .text_color(cx.theme().danger_foreground)
+            .text_center()
             .border_0()
             .rounded(px(9.))
             .w(px(440.))

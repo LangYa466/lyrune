@@ -118,7 +118,6 @@ impl ListDelegate for PlaylistListDelegate {
                         .gap_3()
                         .px_2()
                         .rounded(px(9.))
-                        .when(selected, |row| row.bg(cx.theme().muted))
                         .child(cover)
                         .child(
                             v_flex()
