@@ -83,7 +83,7 @@ const LYRIC_ROW_HEIGHT: f32 = 104.;
 const LYRIC_EDGE_FADE_DISTANCE: f32 = 48.;
 const LYRIC_SCROLL_DURATION: Duration = Duration::from_millis(360);
 const LYRIC_STYLE_DURATION: Duration = Duration::from_millis(240);
-const LYRIC_EXPANSION_DURATION: Duration = Duration::from_millis(380);
+const LYRIC_EXPANSION_DURATION: Duration = Duration::from_millis(480);
 const LYRIC_TRACK_SWITCH_DURATION: Duration = Duration::from_millis(420);
 const LYRIC_BACKGROUND_OVERLAY_OPACITY: f32 = 0.4;
 const LYRIC_MINIMUM_CONTRAST: f32 = 5.;
@@ -8952,7 +8952,7 @@ impl LyruneView {
         let expansion_progress = transition(
             ("cover-backdrop", "expansion-progress"),
             if self.cover_backdrop_expanded { 1. } else { 0. },
-            Transition::new(LYRIC_EXPANSION_DURATION),
+            Transition::new(LYRIC_EXPANSION_DURATION).ease(|progress| 1. - (1. - progress).powi(4)),
             window,
             cx,
         );
@@ -9745,7 +9745,7 @@ impl LyruneView {
         let expansion_progress = transition(
             ("cover-backdrop", "expansion-progress"),
             if self.cover_backdrop_expanded { 1. } else { 0. },
-            Transition::new(LYRIC_EXPANSION_DURATION),
+            Transition::new(LYRIC_EXPANSION_DURATION).ease(|progress| 1. - (1. - progress).powi(4)),
             window,
             cx,
         );
