@@ -32,7 +32,7 @@ use gpui_component::{
 };
 use quick_xml::{Reader, escape::unescape, events::Event};
 use tokio::runtime::{Builder, Runtime};
-use tokio::sync::oneshot;
+use tokio::sync::{mpsc, oneshot};
 use tokio::task::JoinHandle;
 use wana_kana::{ConvertJapanese as _, IsJapaneseStr as _};
 
@@ -2298,8 +2298,8 @@ pub struct LyruneView {
     _subscriptions: Vec<Subscription>,
     _window_subscription: Option<Subscription>,
     _appearance_subscription: Option<Subscription>,
-    window_tick_wake: Option<async_channel::Sender<()>>,
-    background_tick_wake: Option<async_channel::Sender<()>>,
+    window_tick_wake: Option<mpsc::Sender<()>>,
+    background_tick_wake: Option<mpsc::Sender<()>>,
     lyric_animation_frame_pending: bool,
     next_lyric_highlight_frame: Option<Instant>,
     next_lyric_scroll_frame: Option<Instant>,
@@ -2413,8 +2413,8 @@ impl LyruneView {
                 .min(1.)
                 .step(1.)
         });
-        let (load_more_sender, load_more_receiver) = async_channel::bounded(1);
-        let (track_event_sender, track_event_receiver) = async_channel::unbounded();
+        let (load_more_sender, mut load_more_receiver) = mpsc::channel(1);
+        let (track_event_sender, mut track_event_receiver) = mpsc::unbounded_channel();
         let track_table = cx.new(|cx| {
             TableState::new(
                 TrackTableDelegate::new(load_more_sender, track_event_sender),
@@ -2508,7 +2508,7 @@ impl LyruneView {
         ];
 
         cx.spawn(async move |this, cx| {
-            while load_more_receiver.recv().await.is_ok() {
+            while load_more_receiver.recv().await.is_some() {
                 if this
                     .update(cx, |this, cx| this.load_playlist_page(cx))
                     .is_err()
@@ -2520,7 +2520,7 @@ impl LyruneView {
         .detach();
 
         cx.spawn_in(window, async move |this, cx| {
-            while let Ok(event) = track_event_receiver.recv().await {
+            while let Some(event) = track_event_receiver.recv().await {
                 if this
                     .update_in(cx, |this, window, cx| match event {
                         TrackTableEvent::Artist(artist) => {
@@ -2704,7 +2704,7 @@ impl LyruneView {
     }
 
     fn start_window_tick(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let (wake_sender, wake_receiver) = async_channel::bounded(1);
+        let (wake_sender, mut wake_receiver) = mpsc::channel(1);
         self.window_tick_wake = Some(wake_sender);
         cx.spawn_in(window, async move |this, cx| {
             loop {
@@ -2717,7 +2717,7 @@ impl LyruneView {
                     if this
                         .update_in(cx, |this, window, cx| this.sync_progress_slider(window, cx))
                         .is_err()
-                        || wake_receiver.recv().await.is_err()
+                        || wake_receiver.recv().await.is_none()
                     {
                         break;
                     }
@@ -2736,8 +2736,8 @@ impl LyruneView {
                             break;
                         }
                     }
-                    Either::Right((Ok(()), _)) => {}
-                    Either::Right((Err(_), _)) => break,
+                    Either::Right((Some(()), _)) => {}
+                    Either::Right((None, _)) => break,
                 }
             }
         })
@@ -2745,7 +2745,7 @@ impl LyruneView {
     }
 
     pub(crate) fn start_background_tick(&mut self, cx: &mut Context<Self>) {
-        let (wake_sender, wake_receiver) = async_channel::bounded(1);
+        let (wake_sender, mut wake_receiver) = mpsc::channel(1);
         self.background_tick_wake = Some(wake_sender);
         cx.spawn(async move |this, cx| {
             loop {
@@ -2760,7 +2760,7 @@ impl LyruneView {
                     Err(_) => break,
                 };
                 let Some(interval) = interval else {
-                    if wake_receiver.recv().await.is_err() {
+                    if wake_receiver.recv().await.is_none() {
                         break;
                     }
                     continue;
@@ -2775,8 +2775,8 @@ impl LyruneView {
                             break;
                         }
                     }
-                    Either::Right((Ok(()), _)) => {}
-                    Either::Right((Err(_), _)) => break,
+                    Either::Right((Some(()), _)) => {}
+                    Either::Right((None, _)) => break,
                 }
             }
         })
@@ -3055,10 +3055,10 @@ impl LyruneView {
         self.login_message = "正在向 QQ 音乐申请二维码…".to_owned();
         cx.notify();
 
-        let (sender, receiver) = async_channel::unbounded();
+        let (sender, mut receiver) = mpsc::unbounded_channel();
         drop(RUNTIME.spawn(run_qr_login(sender)));
         cx.spawn(async move |this, cx| {
-            while let Ok(event) = receiver.recv().await {
+            while let Some(event) = receiver.recv().await {
                 let completed = matches!(
                     event,
                     LoginEvent::Succeeded(_) | LoginEvent::Expired | LoginEvent::Failed(_)
@@ -4845,7 +4845,7 @@ impl LyruneView {
         cx.notify();
 
         let disk_cache = self.lyric_disk_cache.clone();
-        let (sender, receiver) = async_channel::bounded(2);
+        let (sender, mut receiver) = mpsc::channel(2);
         let worker_mid = mid.clone();
         drop(RUNTIME.spawn(async move {
             let mut had_cached = had_cached;
@@ -4898,7 +4898,7 @@ impl LyruneView {
         }));
 
         cx.spawn(async move |this, cx| {
-            while let Ok(event) = receiver.recv().await {
+            while let Some(event) = receiver.recv().await {
                 if this
                     .update(cx, |this, cx| {
                         match event {
@@ -5060,7 +5060,7 @@ impl LyruneView {
         cx.notify();
         self.maybe_load_queue_recommendations(false, cx);
 
-        let (sender, receiver) = async_channel::bounded(1);
+        let (sender, mut receiver) = mpsc::channel(1);
         drop(RUNTIME.spawn(async move {
             let result = async {
                 let reused_stream = match reused_urls {
@@ -5146,7 +5146,7 @@ impl LyruneView {
         }));
 
         cx.spawn(async move |this, cx| {
-            while let Ok(event) = receiver.recv().await {
+            while let Some(event) = receiver.recv().await {
                 let finished = matches!(&event, PlaybackLoadEvent::Finished(_));
                 let seeked = matches!(&event, PlaybackLoadEvent::Finished(Ok(_)));
                 let _ = this.update(cx, |this, cx| {

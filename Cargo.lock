@@ -4003,7 +4003,6 @@ version = "1.3.0"
 dependencies = [
  "anyhow",
  "ashpd",
- "async-channel",
  "bytes",
  "directories",
  "futures-util",
@@ -4334,7 +4333,6 @@ dependencies = [
  "aes",
  "anyhow",
  "arc-swap",
- "async-channel",
  "async-tungstenite",
  "base64",
  "bytes",

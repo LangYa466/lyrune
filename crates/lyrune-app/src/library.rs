@@ -2,7 +2,6 @@ use std::sync::Arc;
 
 use crate::http::cached_image_source;
 use crate::icons::{MediaIcon, media_icon_hsla};
-use async_channel::Sender;
 use gpui::{
     AnyElement, App, Context, Image, ImageFormat, InteractiveElement as _, IntoElement,
     MouseButton, ParentElement as _, Pixels, Stateful, StatefulInteractiveElement as _,
@@ -15,6 +14,7 @@ use gpui_component::{
     v_flex,
 };
 use qqmusic_api::integration::{SearchAlbum, SearchArtist, Track, UserPlaylist, UserPlaylistId};
+use tokio::sync::mpsc;
 
 #[derive(Clone)]
 #[allow(clippy::large_enum_variant)]
@@ -228,12 +228,15 @@ pub struct TrackTableDelegate {
     playback_active: bool,
     show_liked_actions: bool,
     compact: bool,
-    load_more_sender: Sender<()>,
-    event_sender: Sender<TrackTableEvent>,
+    load_more_sender: mpsc::Sender<()>,
+    event_sender: mpsc::UnboundedSender<TrackTableEvent>,
 }
 
 impl TrackTableDelegate {
-    pub fn new(load_more_sender: Sender<()>, event_sender: Sender<TrackTableEvent>) -> Self {
+    pub fn new(
+        load_more_sender: mpsc::Sender<()>,
+        event_sender: mpsc::UnboundedSender<TrackTableEvent>,
+    ) -> Self {
         Self {
             columns: track_columns(false),
             tracks: Vec::new(),
@@ -284,7 +287,7 @@ impl TrackTableDelegate {
                     .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
                     .on_click(move |_, _, cx| {
                         cx.stop_propagation();
-                        let _ = sender.try_send(TrackTableEvent::Artist(artist.clone()));
+                        let _ = sender.send(TrackTableEvent::Artist(artist.clone()));
                     })
                     .child(name)
                     .into_any_element(),
@@ -558,7 +561,7 @@ impl TableDelegate for TrackTableDelegate {
                             .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
                             .on_click(move |_, _, cx| {
                                 cx.stop_propagation();
-                                let _ = sender.try_send(TrackTableEvent::Album(album.clone()));
+                                let _ = sender.send(TrackTableEvent::Album(album.clone()));
                             })
                     })
                     .child(album)
@@ -594,7 +597,7 @@ impl TableDelegate for TrackTableDelegate {
                                 .on_click(move |_, _, cx| {
                                     cx.stop_propagation();
                                     let _ = sender
-                                        .try_send(TrackTableEvent::Unlike(track.as_ref().clone()));
+                                        .send(TrackTableEvent::Unlike(track.as_ref().clone()));
                                 })
                                 .child(media_icon_hsla(
                                     MediaIcon::HeartFilled,

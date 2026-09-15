@@ -101,7 +101,7 @@ where
 mod tests {
     use std::sync::atomic::{AtomicUsize, Ordering};
 
-    use tokio::sync::Notify;
+    use tokio::sync::{Notify, mpsc};
 
     use super::*;
 
@@ -134,7 +134,7 @@ mod tests {
         let requests = Arc::new(AtomicUsize::new(0));
         let first_release = Arc::new(Notify::new());
         let second_release = Arc::new(Notify::new());
-        let (started_sender, started_receiver) = async_channel::unbounded();
+        let (started_sender, mut started_receiver) = mpsc::unbounded_channel();
         let singleflight = SingleFlight::<u8, u8>::default();
 
         let first = {
@@ -146,7 +146,7 @@ mod tests {
                 singleflight
                     .run(1, false, move || async move {
                         requests.fetch_add(1, Ordering::SeqCst);
-                        started.send(1).await.expect("report first start");
+                        started.send(1).expect("report first start");
                         release.notified().await;
                         Ok(1)
                     })
@@ -164,7 +164,7 @@ mod tests {
                 singleflight
                     .run(1, true, move || async move {
                         requests.fetch_add(1, Ordering::SeqCst);
-                        started.send(2).await.expect("report forced start");
+                        started.send(2).expect("report forced start");
                         release.notified().await;
                         Ok(2)
                     })

@@ -6,10 +6,9 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use anyhow::{Context as _, Result, bail};
 use arc_swap::ArcSwapOption;
-use async_channel::Sender;
 use base64::Engine as _;
 use serde::{Deserialize, Serialize};
-use tokio::sync::{Mutex, watch};
+use tokio::sync::{Mutex, mpsc, watch};
 use uuid::Uuid;
 
 use crate::MusicClient;
@@ -513,13 +512,13 @@ pub enum LoginEvent {
     Failed(String),
 }
 
-pub async fn run_qr_login(events: Sender<LoginEvent>) {
+pub async fn run_qr_login(events: mpsc::UnboundedSender<LoginEvent>) {
     if let Err(error) = qr_login(&events).await {
-        let _ = events.send(LoginEvent::Failed(format!("{error:#}"))).await;
+        let _ = events.send(LoginEvent::Failed(format!("{error:#}")));
     }
 }
 
-async fn qr_login(events: &Sender<LoginEvent>) -> Result<()> {
+async fn qr_login(events: &mpsc::UnboundedSender<LoginEvent>) -> Result<()> {
     let client = MusicClient::new();
     let session = client
         .login()
@@ -536,18 +535,18 @@ async fn qr_login(events: &Sender<LoginEvent>) -> Result<()> {
     let png = base64::engine::general_purpose::STANDARD
         .decode(encoded)
         .context("无法解码 QQ 音乐二维码")?;
-    let _ = events.send(LoginEvent::QrReady(png)).await;
+    let _ = events.send(LoginEvent::QrReady(png));
 
     loop {
         match session.status().await.context("QQ 音乐扫码状态查询失败")? {
             LoginStatus::WaitingScan => {
-                let _ = events.send(LoginEvent::WaitingScan).await;
+                let _ = events.send(LoginEvent::WaitingScan);
             }
             LoginStatus::WaitingConfirm => {
-                let _ = events.send(LoginEvent::WaitingConfirm).await;
+                let _ = events.send(LoginEvent::WaitingConfirm);
             }
             LoginStatus::QrCodeExpired => {
-                let _ = events.send(LoginEvent::Expired).await;
+                let _ = events.send(LoginEvent::Expired);
                 return Ok(());
             }
             LoginStatus::Success(LoginToken::Tencent(token)) => {
@@ -555,7 +554,7 @@ async fn qr_login(events: &Sender<LoginEvent>) -> Result<()> {
                 let credential = ProtocolClient::new()?
                     .ensure_encrypted_uin(credential)
                     .await?;
-                let _ = events.send(LoginEvent::Succeeded(credential)).await;
+                let _ = events.send(LoginEvent::Succeeded(credential));
                 return Ok(());
             }
             LoginStatus::Success(LoginToken::Netease(_)) => {
