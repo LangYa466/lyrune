@@ -6,6 +6,7 @@ use async_channel::{Receiver, Sender};
 use mpris_server::{
     LoopStatus, Metadata, PlaybackStatus, Player, Time, TrackId, zbus::Result as ZbusResult,
 };
+use tokio::sync::oneshot;
 
 const STARTUP_TIMEOUT: Duration = Duration::from_secs(5);
 
@@ -102,7 +103,7 @@ impl MprisHandle {
 
 pub struct MprisService {
     handle: MprisHandle,
-    shutdown: Sender<()>,
+    shutdown: Option<oneshot::Sender<()>>,
     thread: Option<thread::JoinHandle<()>>,
 }
 
@@ -114,7 +115,9 @@ impl MprisService {
 
 impl Drop for MprisService {
     fn drop(&mut self) {
-        let _ = self.shutdown.try_send(());
+        if let Some(shutdown) = self.shutdown.take() {
+            let _ = shutdown.send(());
+        }
         if let Some(thread) = self.thread.take() {
             let _ = thread.join();
         }
@@ -124,7 +127,7 @@ impl Drop for MprisService {
 pub fn install() -> Result<(MprisService, Receiver<MprisCommand>)> {
     let (commands, command_events) = async_channel::unbounded();
     let (updates, update_events) = async_channel::unbounded();
-    let (shutdown, shutdown_events) = async_channel::bounded(1);
+    let (shutdown, mut shutdown_events) = oneshot::channel();
     let (startup, startup_result) = std::sync::mpsc::sync_channel(1);
 
     let thread = thread::Builder::new()
@@ -171,7 +174,7 @@ pub fn install() -> Result<(MprisService, Receiver<MprisCommand>)> {
 
                 loop {
                     tokio::select! {
-                        _ = shutdown_events.recv() => break,
+                        _ = &mut shutdown_events => break,
                         update = update_events.recv() => {
                             let Ok(update) = update else {
                                 break;
@@ -190,7 +193,7 @@ pub fn install() -> Result<(MprisService, Receiver<MprisCommand>)> {
         Ok(Ok(())) => Ok((
             MprisService {
                 handle: MprisHandle { updates },
-                shutdown,
+                shutdown: Some(shutdown),
                 thread: Some(thread),
             },
             command_events,
@@ -200,7 +203,7 @@ pub fn install() -> Result<(MprisService, Receiver<MprisCommand>)> {
             Err(anyhow!(error))
         }
         Err(error) => {
-            let _ = shutdown.try_send(());
+            let _ = shutdown.send(());
             let _ = thread.join();
             Err(error).context("等待 MPRIS 服务启动失败")
         }

@@ -32,6 +32,7 @@ use gpui_component::{
 };
 use quick_xml::{Reader, escape::unescape, events::Event};
 use tokio::runtime::{Builder, Runtime};
+use tokio::sync::oneshot;
 use tokio::task::JoinHandle;
 use wana_kana::{ConvertJapanese as _, IsJapaneseStr as _};
 
@@ -3001,7 +3002,7 @@ impl LyruneView {
     }
 
     fn restore_credential(&mut self, cx: &mut Context<Self>) {
-        let (sender, receiver) = async_channel::bounded(1);
+        let (sender, receiver) = oneshot::channel();
         drop(RUNTIME.spawn(async move {
             let result: anyhow::Result<Option<QqCredential>> = async {
                 let stored = tokio::task::spawn_blocking(CredentialStore::load)
@@ -3010,11 +3011,11 @@ impl LyruneView {
                 Ok(stored)
             }
             .await;
-            let _ = sender.send(result).await;
+            let _ = sender.send(result);
         }));
 
         cx.spawn(async move |this, cx| {
-            let Ok(result) = receiver.recv().await else {
+            let Ok(result) = receiver.await else {
                 return;
             };
             let _ = this.update(cx, |this, cx| match result {
@@ -3109,17 +3110,17 @@ impl LyruneView {
     }
 
     fn persist_credential(&self, credential: QqCredential, cx: &mut Context<Self>) {
-        let (sender, receiver) = async_channel::bounded(1);
+        let (sender, receiver) = oneshot::channel();
         drop(RUNTIME.spawn(async move {
             let result = tokio::task::spawn_blocking(move || CredentialStore::save(&credential))
                 .await
                 .context("保存凭据任务异常退出")
                 .and_then(|result| result);
-            let _ = sender.send(result).await;
+            let _ = sender.send(result);
         }));
 
         cx.spawn(async move |this, cx| {
-            let Ok(Err(error)) = receiver.recv().await else {
+            let Ok(Err(error)) = receiver.await else {
                 return;
             };
             let _ = this.update(cx, |this, cx| {
@@ -3181,7 +3182,7 @@ impl LyruneView {
             return;
         };
         let generation = self.login_generation;
-        let (sender, receiver) = async_channel::bounded(1);
+        let (sender, receiver) = oneshot::channel();
         let task_credential = credential.clone();
         drop(RUNTIME.spawn(async move {
             let result = tokio::time::timeout(
@@ -3191,11 +3192,11 @@ impl LyruneView {
             .await
             .context("QQ 音乐登录凭据验证等待超过 30 秒")
             .and_then(|result| result);
-            let _ = sender.send(result).await;
+            let _ = sender.send(result);
         }));
 
         cx.spawn(async move |this, cx| {
-            let Ok(Err(error)) = receiver.recv().await else {
+            let Ok(Err(error)) = receiver.await else {
                 return;
             };
             let _ = this.update(cx, |this, cx| {
@@ -3521,7 +3522,7 @@ impl LyruneView {
         }
         cx.notify();
 
-        let (sender, receiver) = async_channel::bounded(1);
+        let (sender, receiver) = oneshot::channel();
         drop(RUNTIME.spawn(async move {
             let result = tokio::time::timeout(
                 Duration::from_secs(30),
@@ -3530,11 +3531,11 @@ impl LyruneView {
             .await
             .context("QQ 音乐搜索等待超过 30 秒")
             .and_then(|result| result);
-            let _ = sender.send(result).await;
+            let _ = sender.send(result);
         }));
 
         cx.spawn(async move |this, cx| {
-            let Ok(result) = receiver.recv().await else {
+            let Ok(result) = receiver.await else {
                 return;
             };
             let _ = this.update(cx, |this, cx| {
@@ -3620,7 +3621,7 @@ impl LyruneView {
         let query = self.search_query.clone();
         cx.notify();
 
-        let (sender, receiver) = async_channel::bounded(1);
+        let (sender, receiver) = oneshot::channel();
         drop(RUNTIME.spawn(async move {
             let result = match category {
                 SearchCategory::Songs => client
@@ -3640,11 +3641,11 @@ impl LyruneView {
                     .await
                     .map(SearchMoreResults::Playlists),
             };
-            let _ = sender.send(result).await;
+            let _ = sender.send(result);
         }));
 
         cx.spawn(async move |this, cx| {
-            let Ok(result) = receiver.recv().await else {
+            let Ok(result) = receiver.await else {
                 return;
             };
             let _ = this.update(cx, |this, cx| {
@@ -3756,7 +3757,7 @@ impl LyruneView {
         self.home_error = None;
         cx.notify();
 
-        let (sender, receiver) = async_channel::bounded(1);
+        let (sender, receiver) = oneshot::channel();
         drop(RUNTIME.spawn(async move {
             let result = tokio::time::timeout(
                 Duration::from_secs(30),
@@ -3765,11 +3766,11 @@ impl LyruneView {
             .await
             .context("QQ 音乐主页请求等待超过 30 秒")
             .and_then(|result| result);
-            let _ = sender.send(result).await;
+            let _ = sender.send(result);
         }));
 
         cx.spawn(async move |this, cx| {
-            let Ok(result) = receiver.recv().await else {
+            let Ok(result) = receiver.await else {
                 return;
             };
             let _ = this.update(cx, |this, cx| {
@@ -3807,7 +3808,7 @@ impl LyruneView {
         self.home_recommendation_loading = Some(kind);
         cx.notify();
 
-        let (sender, receiver) = async_channel::bounded(1);
+        let (sender, receiver) = oneshot::channel();
         drop(RUNTIME.spawn(async move {
             let result = tokio::time::timeout(Duration::from_secs(30), async {
                 match kind {
@@ -3830,11 +3831,11 @@ impl LyruneView {
             .await
             .context("QQ 音乐个性化推荐请求等待超过 30 秒")
             .and_then(|result| result);
-            let _ = sender.send(result).await;
+            let _ = sender.send(result);
         }));
 
         cx.spawn(async move |this, cx| {
-            let Ok(result) = receiver.recv().await else {
+            let Ok(result) = receiver.await else {
                 return;
             };
             let _ = this.update(cx, |this, cx| {
@@ -3895,7 +3896,7 @@ impl LyruneView {
         let generation = self.queue_generation;
         self.queue_recommendation_loading = true;
 
-        let (sender, receiver) = async_channel::bounded(1);
+        let (sender, receiver) = oneshot::channel();
         drop(RUNTIME.spawn(async move {
             let result = tokio::time::timeout(Duration::from_secs(30), async {
                 match continuation {
@@ -3920,11 +3921,11 @@ impl LyruneView {
             .await
             .context("QQ 音乐推荐队列请求等待超过 30 秒")
             .and_then(|result| result);
-            let _ = sender.send(result).await;
+            let _ = sender.send(result);
         }));
 
         cx.spawn(async move |this, cx| {
-            let Ok(result) = receiver.recv().await else {
+            let Ok(result) = receiver.await else {
                 return;
             };
             let _ = this.update(cx, |this, cx| {
@@ -3993,7 +3994,7 @@ impl LyruneView {
         let generation = self.library_generation;
         self.library_loading = true;
         cx.notify();
-        let (sender, receiver) = async_channel::bounded(1);
+        let (sender, receiver) = oneshot::channel();
         drop(RUNTIME.spawn(async move {
             let result = async {
                 tokio::time::timeout(Duration::from_secs(30), async {
@@ -4006,11 +4007,11 @@ impl LyruneView {
                 .context("QQ 音乐用户资料和歌单请求等待超过 30 秒")?
             }
             .await;
-            let _ = sender.send(result).await;
+            let _ = sender.send(result);
         }));
 
         cx.spawn(async move |this, cx| {
-            let Ok(result) = receiver.recv().await else {
+            let Ok(result) = receiver.await else {
                 return;
             };
             let _ = this.update(cx, |this, cx| {
@@ -4226,16 +4227,16 @@ impl LyruneView {
         let playlist = artist.into_playlist();
         cx.notify();
 
-        let (sender, receiver) = async_channel::bounded(1);
+        let (sender, receiver) = oneshot::channel();
         drop(RUNTIME.spawn(async move {
             let result = client
                 .playlist_page(&credential, &playlist, offset, ARTIST_PAGE_SIZE)
                 .await;
-            let _ = sender.send(result).await;
+            let _ = sender.send(result);
         }));
 
         cx.spawn(async move |this, cx| {
-            let Ok(result) = receiver.recv().await else {
+            let Ok(result) = receiver.await else {
                 return;
             };
             let _ = this.update(cx, |this, cx| {
@@ -4318,16 +4319,16 @@ impl LyruneView {
         };
         cx.notify();
 
-        let (sender, receiver) = async_channel::bounded(1);
+        let (sender, receiver) = oneshot::channel();
         drop(RUNTIME.spawn(async move {
             let result = client
                 .artist_albums(&credential, &artist, offset, ARTIST_PAGE_SIZE)
                 .await;
-            let _ = sender.send(result).await;
+            let _ = sender.send(result);
         }));
 
         cx.spawn(async move |this, cx| {
-            let Ok(result) = receiver.recv().await else {
+            let Ok(result) = receiver.await else {
                 return;
             };
             let _ = this.update(cx, |this, cx| {
@@ -4561,7 +4562,7 @@ impl LyruneView {
             cx.notify();
         });
 
-        let (sender, receiver) = async_channel::bounded(1);
+        let (sender, receiver) = oneshot::channel();
         drop(RUNTIME.spawn(async move {
             let result = request_playlist_page(
                 requests,
@@ -4572,11 +4573,11 @@ impl LyruneView {
                 force_refresh,
             )
             .await;
-            let _ = sender.send(result).await;
+            let _ = sender.send(result);
         }));
 
         cx.spawn(async move |this, cx| {
-            let Ok(result) = receiver.recv().await else {
+            let Ok(result) = receiver.await else {
                 return;
             };
             let _ = this.update(cx, |this, cx| {
@@ -4695,7 +4696,7 @@ impl LyruneView {
         let requests = self.playlist_page_requests.clone();
         let queue_resource = playlist_resource.clone();
 
-        let (sender, receiver) = async_channel::bounded(1);
+        let (sender, receiver) = oneshot::channel();
         drop(RUNTIME.spawn(async move {
             let result = async {
                 let mut remaining = Vec::new();
@@ -4729,11 +4730,11 @@ impl LyruneView {
                 Ok::<_, anyhow::Error>(remaining)
             }
             .await;
-            let _ = sender.send(result).await;
+            let _ = sender.send(result);
         }));
 
         cx.spawn(async move |this, cx| {
-            let Ok(result) = receiver.recv().await else {
+            let Ok(result) = receiver.await else {
                 return;
             };
             let _ = this.update(cx, |this, cx| {
@@ -6065,14 +6066,14 @@ impl LyruneView {
         };
         self.liked_state_loading.insert(mid.clone());
         let request_mid = mid.clone();
-        let (sender, receiver) = async_channel::bounded(1);
+        let (sender, receiver) = oneshot::channel();
         drop(RUNTIME.spawn(async move {
             let result = client.track_liked(&credential, &request_mid).await;
-            let _ = sender.send(result).await;
+            let _ = sender.send(result);
         }));
 
         cx.spawn(async move |this, cx| {
-            let Ok(result) = receiver.recv().await else {
+            let Ok(result) = receiver.await else {
                 return;
             };
             let _ = this.update(cx, |this, cx| {
@@ -6147,16 +6148,16 @@ impl LyruneView {
         cx.notify();
 
         let request_track = track.clone();
-        let (sender, receiver) = async_channel::bounded(1);
+        let (sender, receiver) = oneshot::channel();
         drop(RUNTIME.spawn(async move {
             let result = client
                 .set_track_liked(&credential, &request_track, liked)
                 .await;
-            let _ = sender.send(result).await;
+            let _ = sender.send(result);
         }));
 
         cx.spawn(async move |this, cx| {
-            let Ok(result) = receiver.recv().await else {
+            let Ok(result) = receiver.await else {
                 return;
             };
             let _ = this.update(cx, |this, cx| {
