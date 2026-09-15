@@ -183,8 +183,8 @@ mod tests {
     #[test]
     fn secondary_launch_notifies_the_primary_instance() {
         let path = test_instance_path();
-        let primary = match acquire_at(&path).expect("claim primary instance") {
-            InstanceClaim::Primary(primary) => primary,
+        let (primary, mut commands) = match acquire_at(&path).expect("claim primary instance") {
+            InstanceClaim::Primary(primary, commands) => (primary, commands),
             InstanceClaim::Secondary => panic!("first claim must be primary"),
         };
 
@@ -193,9 +193,8 @@ mod tests {
             InstanceClaim::Secondary
         ));
         assert_eq!(
-            primary
-                .commands
-                .recv_blocking()
+            commands
+                .blocking_recv()
                 .expect("receive activation command"),
             InstanceCommand::Show
         );
