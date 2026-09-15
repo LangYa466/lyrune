@@ -3003,21 +3003,11 @@ impl LyruneView {
     fn restore_credential(&mut self, cx: &mut Context<Self>) {
         let (sender, receiver) = async_channel::bounded(1);
         drop(RUNTIME.spawn(async move {
-            let result: anyhow::Result<Option<CredentialSession>> = async {
+            let result: anyhow::Result<Option<QqCredential>> = async {
                 let stored = tokio::task::spawn_blocking(CredentialStore::load)
                     .await
                     .context("读取凭据任务异常退出")??;
-                match stored {
-                    Some(credential) => {
-                        let credential = CredentialSession::new(credential);
-                        let current = credential.ensure_fresh().await?;
-                        let completed = ProtocolClient::new()?
-                            .complete_credential(current.as_ref().clone())
-                            .await?;
-                        Ok(Some(CredentialSession::new(completed)))
-                    }
-                    None => Ok(None),
-                }
+                Ok(stored)
             }
             .await;
             let _ = sender.send(result).await;
@@ -3031,7 +3021,7 @@ impl LyruneView {
                 Ok(Some(credential)) => {
                     this.account_state = AccountState::SignedIn;
                     this.main_content = MainContent::Home;
-                    this.install_credential_session(credential, cx);
+                    this.install_credential_session(CredentialSession::new(credential), cx);
                     this.load_home(cx);
                     this.load_library(false, cx);
                 }

@@ -1037,9 +1037,10 @@ struct TLoginInfoData {
 
 impl TLoginInfoResponse {
     pub(super) fn into_token(self) -> MusicClientResult<TencentLoginToken> {
+        let response_code = self.result.code;
         let data = self.result.data;
-        if self.result.code != 0 {
-            return Err(login_server_error(self.result.code, &data));
+        if response_code != 0 {
+            return Err(login_server_error(response_code, &data));
         }
         if data.musicid == 0 {
             return Err(MusicClientError::InvalidTencentLoginTokenField("musicid"));
@@ -1047,6 +1048,14 @@ impl TLoginInfoResponse {
         if data.musickey.trim().is_empty() {
             return Err(MusicClientError::InvalidTencentLoginTokenField("musickey"));
         }
+
+        let login_type = if data.login_type > 0 {
+            data.login_type
+        } else if data.musickey.starts_with("W_X") {
+            1
+        } else {
+            2
+        };
 
         Ok(TencentLoginToken {
             music_id: data.musicid,
@@ -1063,7 +1072,7 @@ impl TLoginInfoResponse {
             bind_account_type: data.bind_account_type,
             need_refresh_key_in: data.need_refresh_key_in,
             expires_at: (data.expired_at > 0).then_some(data.expired_at),
-            login_type: data.login_type,
+            login_type,
             encrypted_uin: data.encrypted_uin,
         })
     }

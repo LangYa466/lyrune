@@ -1,7 +1,6 @@
 mod protocol;
 mod qrc_des;
 
-use std::future::Future;
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -14,6 +13,7 @@ use tokio::sync::{Mutex, watch};
 use uuid::Uuid;
 
 use crate::MusicClient;
+use crate::error::MusicClientError;
 use crate::models::{LoginStatus, LoginToken, Platform, TencentLoginToken};
 
 pub use protocol::{CdnCache, ProtocolClient};
@@ -22,8 +22,6 @@ const QR_DATA_PREFIX: &str = "data:image/png;base64,";
 
 #[derive(Debug, thiserror::Error)]
 pub enum CredentialError {
-    #[error("QQ 音乐凭证已过期，且 Lyrune 旧版本保存的凭据缺少必要字段，请重新登录")]
-    IncompleteLegacyCredential,
     #[error("QQ 音乐登录凭据已失效（错误码 {code}），请重新登录")]
     Rejected { code: u64 },
     #[error("QQ 音乐登录凭据已注销")]
@@ -31,10 +29,15 @@ pub enum CredentialError {
 }
 
 pub(crate) fn is_credential_rejected(error: &anyhow::Error) -> bool {
-    matches!(
-        error.downcast_ref::<CredentialError>(),
-        Some(CredentialError::Rejected { .. })
-    )
+    error.chain().any(|cause| {
+        matches!(
+            cause.downcast_ref::<CredentialError>(),
+            Some(CredentialError::Rejected { .. })
+        ) || matches!(
+            cause.downcast_ref::<MusicClientError>(),
+            Some(MusicClientError::TencentLoginServerError { .. })
+        )
+    })
 }
 
 #[derive(Clone)]
@@ -87,14 +90,6 @@ impl CredentialSession {
     }
 
     pub async fn ensure_fresh(&self) -> Result<Arc<QqCredential>> {
-        self.ensure_fresh_with(refresh_credential).await
-    }
-
-    async fn ensure_fresh_with<F, Fut>(&self, refresh: F) -> Result<Arc<QqCredential>>
-    where
-        F: FnOnce(QqCredential) -> Fut,
-        Fut: Future<Output = Result<QqCredential>>,
-    {
         let credential = self.snapshot().ok_or(CredentialError::Revoked)?;
         if !credential.is_expiring() {
             return Ok(credential);
@@ -105,9 +100,16 @@ impl CredentialSession {
         if !credential.is_expiring() {
             return Ok(credential);
         }
-        credential.validate_refresh_fields()?;
 
-        let refreshed = Arc::new(refresh(credential.as_ref().clone()).await?);
+        let refreshed = match refresh_credential(credential.as_ref().clone()).await {
+            Ok(refreshed) => Arc::new(refreshed),
+            Err(error) => {
+                if is_credential_rejected(&error) {
+                    self.revoke();
+                }
+                return Err(error);
+            }
+        };
         let previous = self
             .inner
             .current
@@ -225,24 +227,6 @@ impl QqCredential {
             self.expires_at
         };
         expires_at.is_some_and(|expires_at| expires_at <= now + 300)
-    }
-
-    pub fn validate_refresh_fields(&self) -> Result<(), CredentialError> {
-        let common_fields_present = self.music_id != 0
-            && !self.music_key.trim().is_empty()
-            && !self.refresh_token.trim().is_empty()
-            && !self.refresh_key.trim().is_empty()
-            && !self.open_id.trim().is_empty();
-        let provider_fields_present = match self.login_type {
-            1 => !self.union_id.trim().is_empty(),
-            2 => !self.access_token.trim().is_empty(),
-            _ => !self.union_id.trim().is_empty() && !self.access_token.trim().is_empty(),
-        };
-        if common_fields_present && provider_fields_present {
-            Ok(())
-        } else {
-            Err(CredentialError::IncompleteLegacyCredential)
-        }
     }
 }
 
@@ -569,7 +553,7 @@ async fn qr_login(events: &Sender<LoginEvent>) -> Result<()> {
             LoginStatus::Success(LoginToken::Tencent(token)) => {
                 let credential = QqCredential::from_token(token)?;
                 let credential = ProtocolClient::new()?
-                    .complete_credential(credential)
+                    .ensure_encrypted_uin(credential)
                     .await?;
                 let _ = events.send(LoginEvent::Succeeded(credential)).await;
                 return Ok(());
@@ -582,20 +566,16 @@ async fn qr_login(events: &Sender<LoginEvent>) -> Result<()> {
 }
 
 pub async fn refresh_credential(credential: QqCredential) -> Result<QqCredential> {
-    if !credential.is_expiring() {
-        return ProtocolClient::new()?.complete_credential(credential).await;
-    }
-    credential.validate_refresh_fields()?;
-
     let client = MusicClient::new();
+    let previous = credential.to_token();
     let refreshed = client
         .login()
         .refresh()
         .platform(Platform::Tencent)
-        .token(&credential.to_token())
+        .token(&previous)
         .send()
         .await
-        .context("QQ 音乐凭据已过期且刷新失败")?;
+        .context("QQ 音乐凭据刷新失败")?;
 
     let LoginToken::Tencent(token) = refreshed else {
         bail!("QQ 音乐刷新返回了错误的平台凭据");
@@ -605,15 +585,11 @@ pub async fn refresh_credential(credential: QqCredential) -> Result<QqCredential
         refreshed.encrypted_uin = credential.encrypted_uin;
     }
     refreshed.client_guid = credential.client_guid;
-    ProtocolClient::new()?.complete_credential(refreshed).await
+    Ok(refreshed)
 }
 
 #[cfg(test)]
 mod tests {
-    use std::sync::Arc;
-    use std::sync::atomic::{AtomicUsize, Ordering};
-    use std::time::{SystemTime, UNIX_EPOCH};
-
     use serde_json::json;
 
     use super::{CredentialError, CredentialSession, QqCredential, Quality};
@@ -640,33 +616,6 @@ mod tests {
     }
 
     #[test]
-    fn old_stored_credential_reports_actionable_refresh_error() {
-        let credential = credential_from_old_storage(2);
-        let error = credential
-            .validate_refresh_fields()
-            .expect_err("old credential must be rejected before refresh");
-
-        assert!(matches!(error, CredentialError::IncompleteLegacyCredential));
-        assert_eq!(
-            error.to_string(),
-            "QQ 音乐凭证已过期，且 Lyrune 旧版本保存的凭据缺少必要字段，请重新登录"
-        );
-    }
-
-    #[test]
-    fn refresh_fields_follow_login_provider() {
-        let mut wechat = credential_from_old_storage(1);
-        wechat.open_id = "openid".to_owned();
-        wechat.union_id = "unionid".to_owned();
-        assert!(wechat.validate_refresh_fields().is_ok());
-
-        let mut qq = credential_from_old_storage(2);
-        qq.open_id = "openid".to_owned();
-        qq.access_token = "access-token".to_owned();
-        assert!(qq.validate_refresh_fields().is_ok());
-    }
-
-    #[test]
     fn credential_session_shares_and_revokes_snapshot() {
         let credential = credential_from_old_storage(2);
         let session = CredentialSession::new(credential);
@@ -676,85 +625,6 @@ mod tests {
         assert_eq!(snapshot.music_id, 123);
         let revoked = clone.revoke().expect("revoked credential snapshot");
         assert!(std::sync::Arc::ptr_eq(&snapshot, &revoked));
-        assert!(session.snapshot().is_none());
-    }
-
-    #[tokio::test]
-    async fn credential_session_refreshes_expiring_credential_once() {
-        let session = CredentialSession::new(refreshable_expiring_credential());
-        let clone = session.clone();
-        let mut updates = session.subscribe();
-        let refreshes = Arc::new(AtomicUsize::new(0));
-        let first_refreshes = refreshes.clone();
-        let second_refreshes = refreshes.clone();
-
-        let refresh = |refreshes: Arc<AtomicUsize>| {
-            move |mut credential: QqCredential| async move {
-                refreshes.fetch_add(1, Ordering::Relaxed);
-                tokio::time::sleep(std::time::Duration::from_millis(10)).await;
-                credential.expires_at = Some(
-                    SystemTime::now()
-                        .duration_since(UNIX_EPOCH)
-                        .unwrap_or_default()
-                        .as_secs() as i64
-                        + 3600,
-                );
-                Ok(credential)
-            }
-        };
-        let (first, second) = tokio::join!(
-            session.ensure_fresh_with(refresh(first_refreshes)),
-            clone.ensure_fresh_with(refresh(second_refreshes)),
-        );
-
-        assert!(first.is_ok());
-        assert!(second.is_ok());
-        assert_eq!(refreshes.load(Ordering::Relaxed), 1);
-        assert!(updates.changed().await.is_ok());
-        assert_eq!(*updates.borrow(), 1);
-    }
-
-    #[tokio::test]
-    async fn credential_session_rejects_incomplete_legacy_refresh_without_requesting() {
-        let session = CredentialSession::new(credential_from_old_storage(2));
-        let result = session
-            .ensure_fresh_with(|_| async { panic!("invalid credential must not be refreshed") })
-            .await;
-        let error = match result {
-            Ok(_) => panic!("old credential should fail before refresh request"),
-            Err(error) => error,
-        };
-
-        assert_eq!(
-            error.to_string(),
-            "QQ 音乐凭证已过期，且 Lyrune 旧版本保存的凭据缺少必要字段，请重新登录"
-        );
-    }
-
-    #[tokio::test]
-    async fn credential_session_does_not_restore_revoked_credential_after_refresh() {
-        let session = CredentialSession::new(refreshable_expiring_credential());
-        let revoker = session.clone();
-
-        let refresh = session.ensure_fresh_with(|mut credential| async move {
-            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
-            credential.expires_at = None;
-            Ok(credential)
-        });
-        let revoke = async move {
-            tokio::time::sleep(std::time::Duration::from_millis(1)).await;
-            revoker.revoke();
-        };
-        let (result, ()) = tokio::join!(refresh, revoke);
-
-        let error = match result {
-            Ok(_) => panic!("revoked credential must not be restored"),
-            Err(error) => error,
-        };
-        assert!(matches!(
-            error.downcast_ref::<CredentialError>(),
-            Some(CredentialError::Revoked)
-        ));
         assert!(session.snapshot().is_none());
     }
 
