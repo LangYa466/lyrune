@@ -140,16 +140,14 @@ fn show_main_window(state: &Rc<RefCell<MainWindowState>>, cx: &mut App) {
 }
 
 fn main() {
-    let instance = match single_instance::acquire() {
-        Ok(single_instance::InstanceClaim::Primary(instance)) => instance,
+    let (instance, mut instance_commands) = match single_instance::acquire() {
+        Ok(single_instance::InstanceClaim::Primary(instance, commands)) => (instance, commands),
         Ok(single_instance::InstanceClaim::Secondary) => return,
         Err(error) => {
             eprintln!("无法建立 Lyrune 单例：{error:#}");
             return;
         }
     };
-    let instance_commands = instance.commands();
-
     let _ = rustls::crypto::ring::default_provider().install_default();
     let http_client = http::client().expect("create image HTTP client");
     gpui_platform::application()
@@ -174,7 +172,7 @@ fn main() {
                 None,
                 cx,
             );
-            let (tray_commands, tray_events) = async_channel::unbounded();
+            let (tray_commands, mut tray_events) = tokio::sync::mpsc::unbounded_channel();
             let tray_available = match tray::install(
                 tray_commands,
                 settings.tray_icon_style.resolve(cx.window_appearance()),
@@ -229,7 +227,7 @@ fn main() {
 
             let main_window_for_instance = main_window.clone();
             cx.spawn(async move |cx| {
-                while let Ok(command) = instance_commands.recv().await {
+                while let Some(command) = instance_commands.recv().await {
                     match command {
                         single_instance::InstanceCommand::Show => {
                             cx.update(|cx| show_main_window(&main_window_for_instance, cx));
@@ -241,7 +239,7 @@ fn main() {
 
             #[cfg(target_os = "linux")]
             match mpris::install() {
-                Ok((service, mpris_events)) => {
+                Ok((service, mut mpris_events)) => {
                     let mpris_handle = service.handle();
                     main_window.borrow().view.update(cx, |view, _| {
                         view.attach_mpris(mpris_handle);
@@ -250,7 +248,7 @@ fn main() {
 
                     let main_window_for_mpris = main_window.clone();
                     cx.spawn(async move |cx| {
-                        while let Ok(command) = mpris_events.recv().await {
+                        while let Some(command) = mpris_events.recv().await {
                             let quitting = matches!(command, mpris::MprisCommand::Quit);
                             cx.update(|cx| match command {
                                 mpris::MprisCommand::Raise => {
@@ -284,7 +282,7 @@ fn main() {
 
             let main_window_for_tray = main_window;
             cx.spawn(async move |cx| {
-                while let Ok(command) = tray_events.recv().await {
+                while let Some(command) = tray_events.recv().await {
                     match command {
                         TrayCommand::Show => {
                             cx.update(|cx| show_main_window(&main_window_for_tray, cx));

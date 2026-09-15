@@ -2,9 +2,12 @@ use std::thread;
 use std::time::Duration;
 
 use anyhow::{Context as _, Result, anyhow};
-use async_channel::{Receiver, Sender};
 use mpris_server::{
     LoopStatus, Metadata, PlaybackStatus, Player, Time, TrackId, zbus::Result as ZbusResult,
+};
+use tokio::sync::{
+    mpsc::{UnboundedReceiver, UnboundedSender},
+    oneshot,
 };
 
 const STARTUP_TIMEOUT: Duration = Duration::from_secs(5);
@@ -75,34 +78,32 @@ enum MprisUpdate {
 
 #[derive(Clone)]
 pub struct MprisHandle {
-    updates: Sender<MprisUpdate>,
+    updates: UnboundedSender<MprisUpdate>,
 }
 
 impl MprisHandle {
     pub fn update(&self, snapshot: MprisSnapshot) {
-        let _ = self.updates.try_send(MprisUpdate::State {
+        let _ = self.updates.send(MprisUpdate::State {
             snapshot,
             seeked: false,
         });
     }
 
     pub fn seeked(&self, snapshot: MprisSnapshot) {
-        let _ = self.updates.try_send(MprisUpdate::State {
+        let _ = self.updates.send(MprisUpdate::State {
             snapshot,
             seeked: true,
         });
     }
 
     pub fn update_position(&self, position_micros: i64) {
-        let _ = self
-            .updates
-            .try_send(MprisUpdate::Position(position_micros));
+        let _ = self.updates.send(MprisUpdate::Position(position_micros));
     }
 }
 
 pub struct MprisService {
     handle: MprisHandle,
-    shutdown: Sender<()>,
+    shutdown: Option<oneshot::Sender<()>>,
     thread: Option<thread::JoinHandle<()>>,
 }
 
@@ -114,17 +115,19 @@ impl MprisService {
 
 impl Drop for MprisService {
     fn drop(&mut self) {
-        let _ = self.shutdown.try_send(());
+        if let Some(shutdown) = self.shutdown.take() {
+            let _ = shutdown.send(());
+        }
         if let Some(thread) = self.thread.take() {
             let _ = thread.join();
         }
     }
 }
 
-pub fn install() -> Result<(MprisService, Receiver<MprisCommand>)> {
-    let (commands, command_events) = async_channel::unbounded();
-    let (updates, update_events) = async_channel::unbounded();
-    let (shutdown, shutdown_events) = async_channel::bounded(1);
+pub fn install() -> Result<(MprisService, UnboundedReceiver<MprisCommand>)> {
+    let (commands, command_events) = tokio::sync::mpsc::unbounded_channel();
+    let (updates, mut update_events) = tokio::sync::mpsc::unbounded_channel();
+    let (shutdown, mut shutdown_events) = oneshot::channel();
     let (startup, startup_result) = std::sync::mpsc::sync_channel(1);
 
     let thread = thread::Builder::new()
@@ -171,9 +174,9 @@ pub fn install() -> Result<(MprisService, Receiver<MprisCommand>)> {
 
                 loop {
                     tokio::select! {
-                        _ = shutdown_events.recv() => break,
+                        _ = &mut shutdown_events => break,
                         update = update_events.recv() => {
-                            let Ok(update) = update else {
+                            let Some(update) = update else {
                                 break;
                             };
                             if let Err(error) = apply_update(&player, update).await {
@@ -190,7 +193,7 @@ pub fn install() -> Result<(MprisService, Receiver<MprisCommand>)> {
         Ok(Ok(())) => Ok((
             MprisService {
                 handle: MprisHandle { updates },
-                shutdown,
+                shutdown: Some(shutdown),
                 thread: Some(thread),
             },
             command_events,
@@ -200,14 +203,14 @@ pub fn install() -> Result<(MprisService, Receiver<MprisCommand>)> {
             Err(anyhow!(error))
         }
         Err(error) => {
-            let _ = shutdown.try_send(());
+            let _ = shutdown.send(());
             let _ = thread.join();
             Err(error).context("等待 MPRIS 服务启动失败")
         }
     }
 }
 
-fn connect_commands(player: &Player, commands: Sender<MprisCommand>) {
+fn connect_commands(player: &Player, commands: UnboundedSender<MprisCommand>) {
     let sender = commands.clone();
     player.connect_raise(move |_| send_command(&sender, MprisCommand::Raise));
     let sender = commands.clone();
@@ -258,8 +261,8 @@ fn connect_commands(player: &Player, commands: Sender<MprisCommand>) {
     });
 }
 
-fn send_command(commands: &Sender<MprisCommand>, command: MprisCommand) {
-    let _ = commands.try_send(command);
+fn send_command(commands: &UnboundedSender<MprisCommand>, command: MprisCommand) {
+    let _ = commands.send(command);
 }
 
 async fn apply_update(player: &Player, update: MprisUpdate) -> ZbusResult<()> {

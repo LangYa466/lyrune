@@ -1,5 +1,5 @@
 use anyhow::Result;
-use async_channel::Sender;
+use tokio::sync::mpsc::UnboundedSender;
 
 use crate::settings::TrayIconStyle;
 
@@ -48,9 +48,9 @@ fn icon_rgba(style: TrayIconStyle) -> Vec<u8> {
 #[cfg(target_os = "linux")]
 mod platform {
     use anyhow::{Context as _, Result};
-    use async_channel::Sender;
     use ksni::blocking::TrayMethods as _;
     use ksni::menu::{MenuItem, StandardItem};
+    use tokio::sync::mpsc::UnboundedSender;
 
     use super::{ICON_SIZE, TrayCommand, TrayIconStyle, icon_rgba};
 
@@ -67,13 +67,13 @@ mod platform {
     }
 
     struct LinuxTray {
-        commands: Sender<TrayCommand>,
+        commands: UnboundedSender<TrayCommand>,
         icon: ksni::Icon,
     }
 
     impl LinuxTray {
         fn send(&self, command: TrayCommand) {
-            let _ = self.commands.try_send(command);
+            let _ = self.commands.send(command);
         }
     }
 
@@ -119,7 +119,10 @@ mod platform {
     }
 
     impl DesktopTray {
-        pub fn install(commands: Sender<TrayCommand>, style: TrayIconStyle) -> Result<Self> {
+        pub fn install(
+            commands: UnboundedSender<TrayCommand>,
+            style: TrayIconStyle,
+        ) -> Result<Self> {
             let tray = LinuxTray {
                 commands,
                 icon: icon(style),
@@ -148,7 +151,7 @@ mod platform {
 #[cfg(any(target_os = "macos", target_os = "windows"))]
 mod platform {
     use anyhow::{Context as _, Result};
-    use async_channel::Sender;
+    use tokio::sync::mpsc::UnboundedSender;
     use tray_icon::menu::{Menu, MenuEvent, MenuItem};
     use tray_icon::{
         Icon, MouseButton, MouseButtonState, TrayIcon, TrayIconBuilder, TrayIconEvent,
@@ -161,7 +164,10 @@ mod platform {
     }
 
     impl DesktopTray {
-        pub fn install(commands: Sender<TrayCommand>, style: TrayIconStyle) -> Result<Self> {
+        pub fn install(
+            commands: UnboundedSender<TrayCommand>,
+            style: TrayIconStyle,
+        ) -> Result<Self> {
             let menu = Menu::new();
             let show = MenuItem::new("打开 Lyrune", true, None);
             let quit = MenuItem::new("退出", true, None);
@@ -180,7 +186,7 @@ mod platform {
                     None
                 };
                 if let Some(command) = command {
-                    let _ = menu_commands.try_send(command);
+                    let _ = menu_commands.send(command);
                 }
             }));
 
@@ -194,7 +200,7 @@ mod platform {
                         ..
                     }
                 ) {
-                    let _ = click_commands.try_send(TrayCommand::Show);
+                    let _ = click_commands.send(TrayCommand::Show);
                 }
             }));
 
@@ -222,7 +228,10 @@ mod platform {
 
 pub use platform::DesktopTray;
 
-pub fn install(commands: Sender<TrayCommand>, style: TrayIconStyle) -> Result<DesktopTray> {
+pub fn install(
+    commands: UnboundedSender<TrayCommand>,
+    style: TrayIconStyle,
+) -> Result<DesktopTray> {
     DesktopTray::install(commands, style)
 }
 

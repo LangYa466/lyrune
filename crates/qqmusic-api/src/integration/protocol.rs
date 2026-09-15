@@ -222,32 +222,13 @@ impl ProtocolClient {
         Ok(dispatch)
     }
 
-    pub async fn complete_credential(&self, mut credential: QqCredential) -> Result<QqCredential> {
-        if !credential.encrypted_uin.trim().is_empty() {
-            return Ok(credential);
-        }
-
-        let refresh_error = match self.refresh_full_credential(&credential).await {
-            Ok(data) => {
-                apply_credential_response(&mut credential, &data);
-                None
-            }
-            Err(error) => Some(error),
-        };
-
-        if credential.encrypted_uin.trim().is_empty()
-            && let Ok(encrypted_uin) = self.fetch_encrypted_uin(&credential).await
-        {
-            credential.encrypted_uin = encrypted_uin;
-        }
-
+    pub async fn ensure_encrypted_uin(&self, mut credential: QqCredential) -> Result<QqCredential> {
         if credential.encrypted_uin.trim().is_empty() {
-            if let Some(error) = refresh_error {
-                bail!("登录成功，但无法补全“已点赞的歌曲”所需的用户标识：{error:#}");
-            }
-            bail!("登录成功，但 QQ 音乐没有返回“已点赞的歌曲”所需的用户标识");
+            credential.encrypted_uin = self
+                .fetch_encrypted_uin(&credential)
+                .await
+                .context("无法补全“已点赞的歌曲”所需的用户标识")?;
         }
-
         Ok(credential)
     }
 
@@ -1052,56 +1033,6 @@ impl ProtocolClient {
         .with_context(|| format!("无法搜索 QQ 音乐中的“{}”", query.trim()))
     }
 
-    async fn refresh_full_credential(&self, credential: &QqCredential) -> Result<Value> {
-        let string_music_id = if credential.string_music_id.is_empty() {
-            credential.music_id.to_string()
-        } else {
-            credential.string_music_id.clone()
-        };
-        let param = match credential.login_type {
-            1 => json!({
-                "openid": credential.open_id,
-                "refresh_token": credential.refresh_token,
-                "str_musicid": string_music_id,
-                "musickey": credential.music_key,
-                "unionid": credential.union_id,
-                "refresh_key": credential.refresh_key,
-                "loginMode": 2,
-            }),
-            2 => json!({
-                "openid": credential.open_id,
-                "access_token": credential.access_token,
-                "refresh_token": credential.refresh_token,
-                "expired_in": credential.expires_at.unwrap_or_default(),
-                "musicid": credential.music_id,
-                "musickey": credential.music_key,
-                "refresh_key": credential.refresh_key,
-                "loginMode": 2,
-            }),
-            _ => json!({
-                "openid": credential.open_id,
-                "access_token": credential.access_token,
-                "refresh_token": credential.refresh_token,
-                "expired_in": credential.expires_at.unwrap_or_default(),
-                "str_musicid": string_music_id,
-                "musicid": credential.music_id,
-                "musickey": credential.music_key,
-                "unionid": credential.union_id,
-                "refresh_key": credential.refresh_key,
-                "loginMode": 2,
-            }),
-        };
-        self.call_with_credential(
-            "music.login.LoginServer",
-            "Login",
-            param,
-            credential,
-            Some(json!({ "tmeLoginType": credential.login_type })),
-        )
-        .await
-        .context("QQ 音乐没有接受凭据补全请求")
-    }
-
     async fn fetch_encrypted_uin(&self, credential: &QqCredential) -> Result<String> {
         let response = self.fetch_legacy_profile(credential).await?;
         find_string_recursively(&response, &["encryptUin", "encrypt_uin"])
@@ -1244,7 +1175,6 @@ impl ProtocolClient {
             .json::<Value>()
             .await
             .context("QQ 音乐网关返回了无效 JSON")?;
-
         let global_code = integer_field(&response, &["code"]).unwrap_or_default();
         if global_code != 0 {
             if is_credential_rejection_code(global_code) {
@@ -1273,73 +1203,6 @@ impl ProtocolClient {
 
 fn is_credential_rejection_code(code: u64) -> bool {
     matches!(code, 1000 | 104_400 | 104_401)
-}
-
-fn apply_credential_response(credential: &mut QqCredential, data: &Value) {
-    if let Some(value) = integer_field(data, &["musicid", "music_id"]).filter(|value| *value > 0) {
-        credential.music_id = value;
-    }
-    if let Some(value) =
-        string_field(data, &["musickey", "music_key"]).filter(|value| !value.is_empty())
-    {
-        credential.music_key = value;
-    }
-    if let Some(value) =
-        string_field(data, &["openid", "open_id"]).filter(|value| !value.is_empty())
-    {
-        credential.open_id = value;
-    }
-    if let Some(value) = string_field(data, &["access_token"]).filter(|value| !value.is_empty()) {
-        credential.access_token = value;
-    }
-    if let Some(value) = string_field(data, &["refresh_token"]).filter(|value| !value.is_empty()) {
-        credential.refresh_token = value;
-    }
-    if let Some(value) = string_field(data, &["refresh_key"]).filter(|value| !value.is_empty()) {
-        credential.refresh_key = value;
-    }
-    if let Some(value) =
-        string_field(data, &["unionid", "union_id"]).filter(|value| !value.is_empty())
-    {
-        credential.union_id = value;
-    }
-    if let Some(value) =
-        string_field(data, &["str_musicid", "string_music_id"]).filter(|value| !value.is_empty())
-    {
-        credential.string_music_id = value;
-    }
-    if let Some(value) =
-        integer_field(data, &["loginType", "login_type"]).filter(|value| *value > 0)
-    {
-        credential.login_type = value;
-    }
-    if let Some(value) = integer_field(data, &["expired_at"]).filter(|value| *value > 0) {
-        credential.expires_at = Some(value as i64);
-    }
-    if let Some(value) = integer_field(data, &["musickeyCreateTime", "musickey_create_time"])
-        .filter(|value| *value > 0)
-    {
-        credential.music_key_create_time = value as i64;
-    }
-    if let Some(value) =
-        integer_field(data, &["keyExpiresIn", "key_expires_in"]).filter(|value| *value > 0)
-    {
-        credential.key_expires_in = value as i64;
-    }
-    if let Some(value) = integer_field(data, &["first_login", "firstLogin"]) {
-        credential.first_login = value as i64;
-    }
-    if let Some(value) = integer_field(data, &["bindAccountType", "bind_account_type"]) {
-        credential.bind_account_type = value as i64;
-    }
-    if let Some(value) = integer_field(data, &["needRefreshKeyIn", "need_refresh_key_in"]) {
-        credential.need_refresh_key_in = value as i64;
-    }
-    if let Some(value) = find_string_recursively(data, &["encryptUin", "encrypt_uin"])
-        .filter(|value| !value.trim().is_empty())
-    {
-        credential.encrypted_uin = value;
-    }
 }
 
 fn parse_track(value: &Value) -> Result<Track> {

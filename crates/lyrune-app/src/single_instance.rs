@@ -8,8 +8,8 @@ use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
 use anyhow::{Context as _, Result, bail};
-use async_channel::Receiver;
 use directories::ProjectDirs;
+use tokio::sync::mpsc::UnboundedReceiver;
 
 const INSTANCE_FILE_HEADER: &str = "LYRUNE_INSTANCE_V1";
 const SHOW_COMMAND: &[u8] = b"show\n";
@@ -22,21 +22,14 @@ pub enum InstanceCommand {
 }
 
 pub enum InstanceClaim {
-    Primary(PrimaryInstance),
+    Primary(PrimaryInstance, UnboundedReceiver<InstanceCommand>),
     Secondary,
 }
 
 pub struct PrimaryInstance {
-    commands: Receiver<InstanceCommand>,
     shutdown: Arc<AtomicBool>,
     listener_thread: Option<JoinHandle<()>>,
     _lock: File,
-}
-
-impl PrimaryInstance {
-    pub fn commands(&self) -> Receiver<InstanceCommand> {
-        self.commands.clone()
-    }
 }
 
 impl Drop for PrimaryInstance {
@@ -70,7 +63,8 @@ fn acquire_at(path: &Path) -> Result<InstanceClaim> {
         .context("无法打开单例状态文件")?;
 
     match lock.try_lock() {
-        Ok(()) => start_primary(lock).map(InstanceClaim::Primary),
+        Ok(()) => start_primary(lock)
+            .map(|(instance, commands)| InstanceClaim::Primary(instance, commands)),
         Err(fs::TryLockError::WouldBlock) => {
             notify_primary(&mut lock)?;
             Ok(InstanceClaim::Secondary)
@@ -79,7 +73,7 @@ fn acquire_at(path: &Path) -> Result<InstanceClaim> {
     }
 }
 
-fn start_primary(mut lock: File) -> Result<PrimaryInstance> {
+fn start_primary(mut lock: File) -> Result<(PrimaryInstance, UnboundedReceiver<InstanceCommand>)> {
     let listener = TcpListener::bind(SocketAddrV4::new(Ipv4Addr::LOCALHOST, 0))
         .context("无法创建单例激活端点")?;
     listener
@@ -92,7 +86,7 @@ fn start_primary(mut lock: File) -> Result<PrimaryInstance> {
     write!(lock, "{INSTANCE_FILE_HEADER}\n{}\n", address.port()).context("无法写入单例激活地址")?;
     lock.sync_data().context("无法同步单例状态")?;
 
-    let (commands, command_events) = async_channel::unbounded();
+    let (commands, command_events) = tokio::sync::mpsc::unbounded_channel();
     let shutdown = Arc::new(AtomicBool::new(false));
     let listener_shutdown = shutdown.clone();
     let listener_thread = thread::Builder::new()
@@ -104,7 +98,7 @@ fn start_primary(mut lock: File) -> Result<PrimaryInstance> {
                         let _ = stream.set_read_timeout(Some(Duration::from_secs(1)));
                         let mut command = [0; SHOW_COMMAND.len()];
                         if stream.read_exact(&mut command).is_ok() && command == SHOW_COMMAND {
-                            let _ = commands.try_send(InstanceCommand::Show);
+                            let _ = commands.send(InstanceCommand::Show);
                         }
                     }
                     Err(error) if error.kind() == ErrorKind::WouldBlock => {
@@ -116,12 +110,14 @@ fn start_primary(mut lock: File) -> Result<PrimaryInstance> {
         })
         .context("无法启动单例激活监听")?;
 
-    Ok(PrimaryInstance {
-        commands: command_events,
-        shutdown,
-        listener_thread: Some(listener_thread),
-        _lock: lock,
-    })
+    Ok((
+        PrimaryInstance {
+            shutdown,
+            listener_thread: Some(listener_thread),
+            _lock: lock,
+        },
+        command_events,
+    ))
 }
 
 fn notify_primary(lock: &mut File) -> Result<()> {
@@ -187,8 +183,8 @@ mod tests {
     #[test]
     fn secondary_launch_notifies_the_primary_instance() {
         let path = test_instance_path();
-        let primary = match acquire_at(&path).expect("claim primary instance") {
-            InstanceClaim::Primary(primary) => primary,
+        let (primary, mut commands) = match acquire_at(&path).expect("claim primary instance") {
+            InstanceClaim::Primary(primary, commands) => (primary, commands),
             InstanceClaim::Secondary => panic!("first claim must be primary"),
         };
 
@@ -197,9 +193,8 @@ mod tests {
             InstanceClaim::Secondary
         ));
         assert_eq!(
-            primary
-                .commands
-                .recv_blocking()
+            commands
+                .blocking_recv()
                 .expect("receive activation command"),
             InstanceCommand::Show
         );

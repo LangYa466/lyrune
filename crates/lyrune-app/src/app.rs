@@ -32,6 +32,7 @@ use gpui_component::{
 };
 use quick_xml::{Reader, escape::unescape, events::Event};
 use tokio::runtime::{Builder, Runtime};
+use tokio::sync::mpsc;
 use tokio::task::JoinHandle;
 use wana_kana::{ConvertJapanese as _, IsJapaneseStr as _};
 
@@ -2297,8 +2298,8 @@ pub struct LyruneView {
     _subscriptions: Vec<Subscription>,
     _window_subscription: Option<Subscription>,
     _appearance_subscription: Option<Subscription>,
-    window_tick_wake: Option<async_channel::Sender<()>>,
-    background_tick_wake: Option<async_channel::Sender<()>>,
+    window_tick_wake: Option<mpsc::Sender<()>>,
+    background_tick_wake: Option<mpsc::Sender<()>>,
     lyric_animation_frame_pending: bool,
     next_lyric_highlight_frame: Option<Instant>,
     next_lyric_scroll_frame: Option<Instant>,
@@ -2412,8 +2413,8 @@ impl LyruneView {
                 .min(1.)
                 .step(1.)
         });
-        let (load_more_sender, load_more_receiver) = async_channel::bounded(1);
-        let (track_event_sender, track_event_receiver) = async_channel::unbounded();
+        let (load_more_sender, mut load_more_receiver) = mpsc::channel(1);
+        let (track_event_sender, mut track_event_receiver) = mpsc::unbounded_channel();
         let track_table = cx.new(|cx| {
             TableState::new(
                 TrackTableDelegate::new(load_more_sender, track_event_sender),
@@ -2507,7 +2508,7 @@ impl LyruneView {
         ];
 
         cx.spawn(async move |this, cx| {
-            while load_more_receiver.recv().await.is_ok() {
+            while load_more_receiver.recv().await.is_some() {
                 if this
                     .update(cx, |this, cx| this.load_playlist_page(cx))
                     .is_err()
@@ -2519,7 +2520,7 @@ impl LyruneView {
         .detach();
 
         cx.spawn_in(window, async move |this, cx| {
-            while let Ok(event) = track_event_receiver.recv().await {
+            while let Some(event) = track_event_receiver.recv().await {
                 if this
                     .update_in(cx, |this, window, cx| match event {
                         TrackTableEvent::Artist(artist) => {
@@ -2703,7 +2704,7 @@ impl LyruneView {
     }
 
     fn start_window_tick(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let (wake_sender, wake_receiver) = async_channel::bounded(1);
+        let (wake_sender, mut wake_receiver) = mpsc::channel(1);
         self.window_tick_wake = Some(wake_sender);
         cx.spawn_in(window, async move |this, cx| {
             loop {
@@ -2716,7 +2717,7 @@ impl LyruneView {
                     if this
                         .update_in(cx, |this, window, cx| this.sync_progress_slider(window, cx))
                         .is_err()
-                        || wake_receiver.recv().await.is_err()
+                        || wake_receiver.recv().await.is_none()
                     {
                         break;
                     }
@@ -2735,8 +2736,8 @@ impl LyruneView {
                             break;
                         }
                     }
-                    Either::Right((Ok(()), _)) => {}
-                    Either::Right((Err(_), _)) => break,
+                    Either::Right((Some(()), _)) => {}
+                    Either::Right((None, _)) => break,
                 }
             }
         })
@@ -2744,7 +2745,7 @@ impl LyruneView {
     }
 
     pub(crate) fn start_background_tick(&mut self, cx: &mut Context<Self>) {
-        let (wake_sender, wake_receiver) = async_channel::bounded(1);
+        let (wake_sender, mut wake_receiver) = mpsc::channel(1);
         self.background_tick_wake = Some(wake_sender);
         cx.spawn(async move |this, cx| {
             loop {
@@ -2759,7 +2760,7 @@ impl LyruneView {
                     Err(_) => break,
                 };
                 let Some(interval) = interval else {
-                    if wake_receiver.recv().await.is_err() {
+                    if wake_receiver.recv().await.is_none() {
                         break;
                     }
                     continue;
@@ -2774,8 +2775,8 @@ impl LyruneView {
                             break;
                         }
                     }
-                    Either::Right((Ok(()), _)) => {}
-                    Either::Right((Err(_), _)) => break,
+                    Either::Right((Some(()), _)) => {}
+                    Either::Right((None, _)) => break,
                 }
             }
         })
@@ -3001,37 +3002,21 @@ impl LyruneView {
     }
 
     fn restore_credential(&mut self, cx: &mut Context<Self>) {
-        let (sender, receiver) = async_channel::bounded(1);
-        drop(RUNTIME.spawn(async move {
-            let result: anyhow::Result<Option<CredentialSession>> = async {
-                let stored = tokio::task::spawn_blocking(CredentialStore::load)
-                    .await
-                    .context("读取凭据任务异常退出")??;
-                match stored {
-                    Some(credential) => {
-                        let credential = CredentialSession::new(credential);
-                        let current = credential.ensure_fresh().await?;
-                        let completed = ProtocolClient::new()?
-                            .complete_credential(current.as_ref().clone())
-                            .await?;
-                        Ok(Some(CredentialSession::new(completed)))
-                    }
-                    None => Ok(None),
-                }
-            }
-            .await;
-            let _ = sender.send(result).await;
-        }));
+        let task = RUNTIME.spawn(async move {
+            tokio::task::spawn_blocking(CredentialStore::load)
+                .await
+                .context("读取凭据任务异常退出")?
+        });
 
         cx.spawn(async move |this, cx| {
-            let Ok(result) = receiver.recv().await else {
+            let Ok(result) = task.await else {
                 return;
             };
             let _ = this.update(cx, |this, cx| match result {
                 Ok(Some(credential)) => {
                     this.account_state = AccountState::SignedIn;
                     this.main_content = MainContent::Home;
-                    this.install_credential_session(credential, cx);
+                    this.install_credential_session(CredentialSession::new(credential), cx);
                     this.load_home(cx);
                     this.load_library(false, cx);
                 }
@@ -3064,10 +3049,10 @@ impl LyruneView {
         self.login_message = "正在向 QQ 音乐申请二维码…".to_owned();
         cx.notify();
 
-        let (sender, receiver) = async_channel::unbounded();
+        let (sender, mut receiver) = mpsc::unbounded_channel();
         drop(RUNTIME.spawn(run_qr_login(sender)));
         cx.spawn(async move |this, cx| {
-            while let Ok(event) = receiver.recv().await {
+            while let Some(event) = receiver.recv().await {
                 let completed = matches!(
                     event,
                     LoginEvent::Succeeded(_) | LoginEvent::Expired | LoginEvent::Failed(_)
@@ -3119,17 +3104,15 @@ impl LyruneView {
     }
 
     fn persist_credential(&self, credential: QqCredential, cx: &mut Context<Self>) {
-        let (sender, receiver) = async_channel::bounded(1);
-        drop(RUNTIME.spawn(async move {
-            let result = tokio::task::spawn_blocking(move || CredentialStore::save(&credential))
+        let task = RUNTIME.spawn(async move {
+            tokio::task::spawn_blocking(move || CredentialStore::save(&credential))
                 .await
                 .context("保存凭据任务异常退出")
-                .and_then(|result| result);
-            let _ = sender.send(result).await;
-        }));
+                .and_then(|result| result)
+        });
 
         cx.spawn(async move |this, cx| {
-            let Ok(Err(error)) = receiver.recv().await else {
+            let Ok(Err(error)) = task.await else {
                 return;
             };
             let _ = this.update(cx, |this, cx| {
@@ -3191,21 +3174,19 @@ impl LyruneView {
             return;
         };
         let generation = self.login_generation;
-        let (sender, receiver) = async_channel::bounded(1);
         let task_credential = credential.clone();
-        drop(RUNTIME.spawn(async move {
-            let result = tokio::time::timeout(
+        let task = RUNTIME.spawn(async move {
+            tokio::time::timeout(
                 Duration::from_secs(30),
                 client.validate_credential(&task_credential),
             )
             .await
             .context("QQ 音乐登录凭据验证等待超过 30 秒")
-            .and_then(|result| result);
-            let _ = sender.send(result).await;
-        }));
+            .and_then(|result| result)
+        });
 
         cx.spawn(async move |this, cx| {
-            let Ok(Err(error)) = receiver.recv().await else {
+            let Ok(Err(error)) = task.await else {
                 return;
             };
             let _ = this.update(cx, |this, cx| {
@@ -3531,20 +3512,18 @@ impl LyruneView {
         }
         cx.notify();
 
-        let (sender, receiver) = async_channel::bounded(1);
-        drop(RUNTIME.spawn(async move {
-            let result = tokio::time::timeout(
+        let task = RUNTIME.spawn(async move {
+            tokio::time::timeout(
                 Duration::from_secs(30),
                 client.search(&credential, &query, SEARCH_PAGE_SIZE as u64),
             )
             .await
             .context("QQ 音乐搜索等待超过 30 秒")
-            .and_then(|result| result);
-            let _ = sender.send(result).await;
-        }));
+            .and_then(|result| result)
+        });
 
         cx.spawn(async move |this, cx| {
-            let Ok(result) = receiver.recv().await else {
+            let Ok(result) = task.await else {
                 return;
             };
             let _ = this.update(cx, |this, cx| {
@@ -3630,9 +3609,8 @@ impl LyruneView {
         let query = self.search_query.clone();
         cx.notify();
 
-        let (sender, receiver) = async_channel::bounded(1);
-        drop(RUNTIME.spawn(async move {
-            let result = match category {
+        let task = RUNTIME.spawn(async move {
+            match category {
                 SearchCategory::Songs => client
                     .search_songs(&credential, &query, offset, SEARCH_PAGE_SIZE as u64)
                     .await
@@ -3649,12 +3627,11 @@ impl LyruneView {
                     .search_playlists(&credential, &query, offset, SEARCH_PAGE_SIZE as u64)
                     .await
                     .map(SearchMoreResults::Playlists),
-            };
-            let _ = sender.send(result).await;
-        }));
+            }
+        });
 
         cx.spawn(async move |this, cx| {
-            let Ok(result) = receiver.recv().await else {
+            let Ok(result) = task.await else {
                 return;
             };
             let _ = this.update(cx, |this, cx| {
@@ -3766,20 +3743,18 @@ impl LyruneView {
         self.home_error = None;
         cx.notify();
 
-        let (sender, receiver) = async_channel::bounded(1);
-        drop(RUNTIME.spawn(async move {
-            let result = tokio::time::timeout(
+        let task = RUNTIME.spawn(async move {
+            tokio::time::timeout(
                 Duration::from_secs(30),
                 client.recommended_playlists(&credential, 0, 20),
             )
             .await
             .context("QQ 音乐主页请求等待超过 30 秒")
-            .and_then(|result| result);
-            let _ = sender.send(result).await;
-        }));
+            .and_then(|result| result)
+        });
 
         cx.spawn(async move |this, cx| {
-            let Ok(result) = receiver.recv().await else {
+            let Ok(result) = task.await else {
                 return;
             };
             let _ = this.update(cx, |this, cx| {
@@ -3817,9 +3792,8 @@ impl LyruneView {
         self.home_recommendation_loading = Some(kind);
         cx.notify();
 
-        let (sender, receiver) = async_channel::bounded(1);
-        drop(RUNTIME.spawn(async move {
-            let result = tokio::time::timeout(Duration::from_secs(30), async {
+        let task = RUNTIME.spawn(async move {
+            tokio::time::timeout(Duration::from_secs(30), async {
                 match kind {
                     RecommendationKind::Radar => {
                         let page = client.radar_tracks(&credential, 1).await?;
@@ -3839,12 +3813,11 @@ impl LyruneView {
             })
             .await
             .context("QQ 音乐个性化推荐请求等待超过 30 秒")
-            .and_then(|result| result);
-            let _ = sender.send(result).await;
-        }));
+            .and_then(|result| result)
+        });
 
         cx.spawn(async move |this, cx| {
-            let Ok(result) = receiver.recv().await else {
+            let Ok(result) = task.await else {
                 return;
             };
             let _ = this.update(cx, |this, cx| {
@@ -3905,9 +3878,8 @@ impl LyruneView {
         let generation = self.queue_generation;
         self.queue_recommendation_loading = true;
 
-        let (sender, receiver) = async_channel::bounded(1);
-        drop(RUNTIME.spawn(async move {
-            let result = tokio::time::timeout(Duration::from_secs(30), async {
+        let task = RUNTIME.spawn(async move {
+            tokio::time::timeout(Duration::from_secs(30), async {
                 match continuation {
                     PersistedQueueContinuation::Radar { next_page, .. } => {
                         let page = client.radar_tracks(&credential, next_page).await?;
@@ -3929,12 +3901,11 @@ impl LyruneView {
             })
             .await
             .context("QQ 音乐推荐队列请求等待超过 30 秒")
-            .and_then(|result| result);
-            let _ = sender.send(result).await;
-        }));
+            .and_then(|result| result)
+        });
 
         cx.spawn(async move |this, cx| {
-            let Ok(result) = receiver.recv().await else {
+            let Ok(result) = task.await else {
                 return;
             };
             let _ = this.update(cx, |this, cx| {
@@ -4003,24 +3974,19 @@ impl LyruneView {
         let generation = self.library_generation;
         self.library_loading = true;
         cx.notify();
-        let (sender, receiver) = async_channel::bounded(1);
-        drop(RUNTIME.spawn(async move {
-            let result = async {
-                tokio::time::timeout(Duration::from_secs(30), async {
-                    tokio::try_join!(
-                        client.user_profile(&credential),
-                        client.user_playlists(&credential)
-                    )
-                })
-                .await
-                .context("QQ 音乐用户资料和歌单请求等待超过 30 秒")?
-            }
-            .await;
-            let _ = sender.send(result).await;
-        }));
+        let task = RUNTIME.spawn(async move {
+            tokio::time::timeout(Duration::from_secs(30), async {
+                tokio::try_join!(
+                    client.user_profile(&credential),
+                    client.user_playlists(&credential)
+                )
+            })
+            .await
+            .context("QQ 音乐用户资料和歌单请求等待超过 30 秒")?
+        });
 
         cx.spawn(async move |this, cx| {
-            let Ok(result) = receiver.recv().await else {
+            let Ok(result) = task.await else {
                 return;
             };
             let _ = this.update(cx, |this, cx| {
@@ -4236,16 +4202,14 @@ impl LyruneView {
         let playlist = artist.into_playlist();
         cx.notify();
 
-        let (sender, receiver) = async_channel::bounded(1);
-        drop(RUNTIME.spawn(async move {
-            let result = client
+        let task = RUNTIME.spawn(async move {
+            client
                 .playlist_page(&credential, &playlist, offset, ARTIST_PAGE_SIZE)
-                .await;
-            let _ = sender.send(result).await;
-        }));
+                .await
+        });
 
         cx.spawn(async move |this, cx| {
-            let Ok(result) = receiver.recv().await else {
+            let Ok(result) = task.await else {
                 return;
             };
             let _ = this.update(cx, |this, cx| {
@@ -4328,16 +4292,14 @@ impl LyruneView {
         };
         cx.notify();
 
-        let (sender, receiver) = async_channel::bounded(1);
-        drop(RUNTIME.spawn(async move {
-            let result = client
+        let task = RUNTIME.spawn(async move {
+            client
                 .artist_albums(&credential, &artist, offset, ARTIST_PAGE_SIZE)
-                .await;
-            let _ = sender.send(result).await;
-        }));
+                .await
+        });
 
         cx.spawn(async move |this, cx| {
-            let Ok(result) = receiver.recv().await else {
+            let Ok(result) = task.await else {
                 return;
             };
             let _ = this.update(cx, |this, cx| {
@@ -4571,22 +4533,17 @@ impl LyruneView {
             cx.notify();
         });
 
-        let (sender, receiver) = async_channel::bounded(1);
-        drop(RUNTIME.spawn(async move {
-            let result = request_playlist_page(
-                requests,
-                client,
-                credential,
-                playlist,
-                offset,
-                force_refresh,
-            )
-            .await;
-            let _ = sender.send(result).await;
-        }));
+        let task = RUNTIME.spawn(request_playlist_page(
+            requests,
+            client,
+            credential,
+            playlist,
+            offset,
+            force_refresh,
+        ));
 
         cx.spawn(async move |this, cx| {
-            let Ok(result) = receiver.recv().await else {
+            let Ok(result) = task.await else {
                 return;
             };
             let _ = this.update(cx, |this, cx| {
@@ -4705,45 +4662,40 @@ impl LyruneView {
         let requests = self.playlist_page_requests.clone();
         let queue_resource = playlist_resource.clone();
 
-        let (sender, receiver) = async_channel::bounded(1);
-        drop(RUNTIME.spawn(async move {
-            let result = async {
-                let mut remaining = Vec::new();
-                let mut has_more = true;
-                while has_more {
-                    let page_offset = offset;
-                    let page = request_playlist_page(
-                        requests.clone(),
-                        client.clone(),
-                        credential.clone(),
-                        playlist.clone(),
-                        offset,
-                        false,
-                    )
-                    .await
-                    .context("无法补全 QQ 音乐播放队列")?;
-                    offset = page.next_offset;
-                    has_more = page.has_more;
-                    let tracks = share_items(page.tracks);
-                    if let Some(resource) = &queue_resource {
-                        lock_resource(resource).apply_page(
-                            page.playlist,
-                            tracks.clone(),
-                            page.has_more,
-                            page.next_offset,
-                            page_offset,
-                        );
-                    }
-                    remaining.extend(tracks);
+        let task = RUNTIME.spawn(async move {
+            let mut remaining = Vec::new();
+            let mut has_more = true;
+            while has_more {
+                let page_offset = offset;
+                let page = request_playlist_page(
+                    requests.clone(),
+                    client.clone(),
+                    credential.clone(),
+                    playlist.clone(),
+                    offset,
+                    false,
+                )
+                .await
+                .context("无法补全 QQ 音乐播放队列")?;
+                offset = page.next_offset;
+                has_more = page.has_more;
+                let tracks = share_items(page.tracks);
+                if let Some(resource) = &queue_resource {
+                    lock_resource(resource).apply_page(
+                        page.playlist,
+                        tracks.clone(),
+                        page.has_more,
+                        page.next_offset,
+                        page_offset,
+                    );
                 }
-                Ok::<_, anyhow::Error>(remaining)
+                remaining.extend(tracks);
             }
-            .await;
-            let _ = sender.send(result).await;
-        }));
+            Ok::<_, anyhow::Error>(remaining)
+        });
 
         cx.spawn(async move |this, cx| {
-            let Ok(result) = receiver.recv().await else {
+            let Ok(result) = task.await else {
                 return;
             };
             let _ = this.update(cx, |this, cx| {
@@ -4854,7 +4806,7 @@ impl LyruneView {
         cx.notify();
 
         let disk_cache = self.lyric_disk_cache.clone();
-        let (sender, receiver) = async_channel::bounded(2);
+        let (sender, mut receiver) = mpsc::channel(2);
         let worker_mid = mid.clone();
         drop(RUNTIME.spawn(async move {
             let mut had_cached = had_cached;
@@ -4907,7 +4859,7 @@ impl LyruneView {
         }));
 
         cx.spawn(async move |this, cx| {
-            while let Ok(event) = receiver.recv().await {
+            while let Some(event) = receiver.recv().await {
                 if this
                     .update(cx, |this, cx| {
                         match event {
@@ -5069,7 +5021,7 @@ impl LyruneView {
         cx.notify();
         self.maybe_load_queue_recommendations(false, cx);
 
-        let (sender, receiver) = async_channel::bounded(1);
+        let (sender, mut receiver) = mpsc::channel(1);
         drop(RUNTIME.spawn(async move {
             let result = async {
                 let reused_stream = match reused_urls {
@@ -5155,7 +5107,7 @@ impl LyruneView {
         }));
 
         cx.spawn(async move |this, cx| {
-            while let Ok(event) = receiver.recv().await {
+            while let Some(event) = receiver.recv().await {
                 let finished = matches!(&event, PlaybackLoadEvent::Finished(_));
                 let seeked = matches!(&event, PlaybackLoadEvent::Finished(Ok(_)));
                 let _ = this.update(cx, |this, cx| {
@@ -6075,14 +6027,11 @@ impl LyruneView {
         };
         self.liked_state_loading.insert(mid.clone());
         let request_mid = mid.clone();
-        let (sender, receiver) = async_channel::bounded(1);
-        drop(RUNTIME.spawn(async move {
-            let result = client.track_liked(&credential, &request_mid).await;
-            let _ = sender.send(result).await;
-        }));
+        let task =
+            RUNTIME.spawn(async move { client.track_liked(&credential, &request_mid).await });
 
         cx.spawn(async move |this, cx| {
-            let Ok(result) = receiver.recv().await else {
+            let Ok(result) = task.await else {
                 return;
             };
             let _ = this.update(cx, |this, cx| {
@@ -6157,16 +6106,14 @@ impl LyruneView {
         cx.notify();
 
         let request_track = track.clone();
-        let (sender, receiver) = async_channel::bounded(1);
-        drop(RUNTIME.spawn(async move {
-            let result = client
+        let task = RUNTIME.spawn(async move {
+            client
                 .set_track_liked(&credential, &request_track, liked)
-                .await;
-            let _ = sender.send(result).await;
-        }));
+                .await
+        });
 
         cx.spawn(async move |this, cx| {
-            let Ok(result) = receiver.recv().await else {
+            let Ok(result) = task.await else {
                 return;
             };
             let _ = this.update(cx, |this, cx| {

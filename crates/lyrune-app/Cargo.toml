@@ -7,7 +7,6 @@ publish.workspace = true
 
 [dependencies]
 anyhow.workspace = true
-async-channel.workspace = true
 bytes.workspace = true
 directories.workspace = true
 futures-util.workspace = true
