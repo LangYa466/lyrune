@@ -87,7 +87,8 @@ const LYRIC_STYLE_DURATION: Duration = Duration::from_millis(240);
 const LYRIC_EXPANSION_DURATION: Duration = Duration::from_millis(480);
 const LYRIC_TRACK_SWITCH_DURATION: Duration = Duration::from_millis(420);
 const LYRIC_BACKGROUND_OVERLAY_OPACITY: f32 = 0.4;
-const LYRIC_MINIMUM_CONTRAST: f32 = 5.;
+const LYRIC_MINIMUM_CONTRAST: f32 = 3.5;
+const LYRIC_DARK_TEXT_LUMINANCE: f32 = 0.25;
 const LYRIC_HORIZONTAL_ANCHOR: f32 = 0.42;
 const LYRIC_HORIZONTAL_STEP: f32 = 0.5;
 const TRANSLATION_ALIGNMENT_TOLERANCE: Duration = Duration::from_millis(500);
@@ -138,7 +139,7 @@ fn readable_lyric_color(sampled_rgb: [f32; 3], overlay: Hsla, preferred: Hsla) -
 
     let black = black().to_rgb();
     let white = white().to_rgb();
-    let neutral = if contrast_ratio(black, background) >= contrast_ratio(white, background) {
+    let neutral = if relative_luminance(background) >= LYRIC_DARK_TEXT_LUMINANCE {
         black
     } else {
         white
@@ -9039,17 +9040,15 @@ impl LyruneView {
                     (None, Some(current)) => current,
                     (None, None) => theme.foreground,
                 };
-                let collapse_lyric_foreground =
-                    current_lyric_foreground.unwrap_or(lyric_foreground);
                 let collapse_foreground_target = self
                     .foreground_target(
                         overlay,
-                        collapse_lyric_foreground,
+                        theme.foreground,
                         |cover| cover.collapse_rgb(),
                         window,
                         cx,
                     )
-                    .unwrap_or(lyric_foreground);
+                    .unwrap_or(theme.foreground);
                 let reveal_start = (1. - 54. / f32::from(available_height).max(54.)).clamp(0., 1.);
                 let control_color_progress =
                     ((expansion_progress - reveal_start) / (1. - reveal_start)).clamp(0., 1.);
@@ -9766,20 +9765,10 @@ impl LyruneView {
         let control_color_progress =
             ((expansion_progress - reveal_start) / (1. - reveal_start)).clamp(0., 1.);
         let control_foreground = if control_color_progress > 0. {
-            let narrow = window.viewport_size().width < px(900.);
-            let lyric_foreground = self
-                .foreground_target(
-                    theme.background.opacity(LYRIC_BACKGROUND_OVERLAY_OPACITY),
-                    theme.foreground,
-                    |cover| cover.sampled_rgb(narrow),
-                    window,
-                    cx,
-                )
-                .unwrap_or(theme.foreground);
             let control_foreground = self
                 .foreground_target(
                     theme.background.opacity(LYRIC_BACKGROUND_OVERLAY_OPACITY),
-                    lyric_foreground,
+                    theme.foreground,
                     |cover| cover.controls_rgb(),
                     window,
                     cx,
