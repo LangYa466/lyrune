@@ -658,14 +658,22 @@ impl ProtocolClient {
             .unwrap_or_default();
         let tracks = songs
             .iter()
+            .filter(|value| {
+                let value = value
+                    .get("songInfo")
+                    .or_else(|| value.get("track"))
+                    .or_else(|| value.get("Track"))
+                    .unwrap_or(value);
+                string_field(value, &["mid", "songmid"]).is_some_and(|mid| !mid.is_empty())
+            })
             .map(parse_track)
             .collect::<Result<Vec<_>>>()
             .with_context(|| format!("QQ 音乐歌单“{}”的数据格式发生了变化", playlist.title))?;
         let total = integer_field(&data, &["total_song_num", "total", "totalNum", "total_num"])
-            .unwrap_or_else(|| offset.saturating_add(tracks.len() as u64));
-        let next_offset = offset.saturating_add(tracks.len() as u64);
+            .unwrap_or_else(|| offset.saturating_add(songs.len() as u64));
+        let next_offset = offset.saturating_add(songs.len() as u64);
         let has_more = bool_field(&data, &["hasmore", "has_more"]).unwrap_or(next_offset < total)
-            && !tracks.is_empty();
+            && !songs.is_empty();
 
         let mut resolved_playlist = playlist_from_detail(&data, playlist.clone());
         if resolved_playlist.track_count == 0 {
