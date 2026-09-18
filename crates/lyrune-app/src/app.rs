@@ -10,7 +10,7 @@ use futures_util::{
 };
 use gpui::{prelude::*, *};
 use gpui_base::{
-    Slider as BaseSlider, SliderIndicator, SliderThumb, SliderTrack,
+    Slider as BaseSlider, SliderIndicator, SliderTrack,
     motion::{Transition, transition},
 };
 use gpui_component::{
@@ -76,6 +76,7 @@ const ARTIST_PAGE_SIZE: u64 = 5;
 const ARTIST_ALBUM_PAGE_SIZE: u64 = 10;
 const SEARCH_PAGE_SIZE: usize = 20;
 const PROGRESS_TICK: Duration = Duration::from_millis(250);
+const PROGRESS_THUMB_RADIUS: Pixels = px(8.);
 const PLAYBACK_PERSIST_INTERVAL: Duration = Duration::from_secs(5);
 const CDN_REFRESH_RETRY: Duration = Duration::from_secs(60);
 const LIBRARY_CACHE_TTL: Duration = Duration::from_secs(30 * 60);
@@ -8711,8 +8712,13 @@ impl LyruneView {
     ) -> AnyElement {
         let theme = cx.theme().clone();
         let monospace_font = self.fonts.monospace.clone();
-        let percentage = self.progress_slider.read(cx).percentage().end;
         let duration = self.current_duration().unwrap_or_default();
+        let percentage =
+            if self.cover_backdrop_visible && self.seek_preview.is_none() && !duration.is_zero() {
+                progress_fraction(self.position, duration)
+            } else {
+                self.progress_slider.read(cx).percentage().end
+            };
         let interactive = has_track && self.playback_started && self.loading_track.is_none();
         let bar_color = theme.slider_bar;
         let thumb_color = theme.slider_thumb;
@@ -8752,31 +8758,55 @@ impl LyruneView {
                     .bg(theme.border)
                     .active(|this| this.bg(bar_color.opacity(0.35)))
                     .child(
-                        div()
-                            .absolute()
-                            .h_full()
-                            .left_0()
-                            .right(relative(1. - percentage))
-                            .bg(bar_color),
-                    )
-                    .when(has_track, |indicator| {
-                        indicator.child(
-                            SliderThumb::new(&self.progress_slider)
-                                .disabled(!interactive)
-                                .absolute()
-                                .top(px(-6.))
-                                .left(relative(percentage))
-                                .ml(-px(8.))
-                                .flex()
-                                .items_center()
-                                .justify_center()
-                                .rounded_full()
-                                .bg(bar_color.opacity(0.5))
-                                .size_4()
-                                .p(px(1.))
-                                .child(div().size_full().rounded_full().bg(thumb_color)),
+                        // Painted as paths because quads and layout snap to device pixels,
+                        // which makes slow progress advance in visible one-pixel steps.
+                        canvas(
+                            |_, _, _| {},
+                            move |bounds, _, window, _| {
+                                let x = bounds.left() + bounds.size.width * percentage;
+                                if x > bounds.left() {
+                                    let mut fill = PathBuilder::fill();
+                                    fill.add_polygon(
+                                        &[
+                                            bounds.origin,
+                                            point(x, bounds.top()),
+                                            point(x, bounds.bottom()),
+                                            bounds.bottom_left(),
+                                        ],
+                                        true,
+                                    );
+                                    if let Ok(path) = fill.build() {
+                                        window.paint_path(path, bar_color);
+                                    }
+                                }
+                                if has_track {
+                                    let center = point(x, bounds.center().y);
+                                    for (radius, color) in [
+                                        (PROGRESS_THUMB_RADIUS, bar_color.opacity(0.5)),
+                                        (PROGRESS_THUMB_RADIUS - px(1.), thumb_color),
+                                    ] {
+                                        let mut circle = PathBuilder::fill();
+                                        circle.move_to(point(center.x - radius, center.y));
+                                        for to in [center.x + radius, center.x - radius] {
+                                            circle.arc_to(
+                                                point(radius, radius),
+                                                px(0.),
+                                                false,
+                                                true,
+                                                point(to, center.y),
+                                            );
+                                        }
+                                        circle.close();
+                                        if let Ok(path) = circle.build() {
+                                            window.paint_path(path, color);
+                                        }
+                                    }
+                                }
+                            },
                         )
-                    }),
+                        .absolute()
+                        .size_full(),
+                    ),
             );
         let control = BaseSlider::new(&self.progress_slider)
             .disabled(!interactive)
